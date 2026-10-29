@@ -411,7 +411,7 @@ print("shelf follows")
         self.assertLess(dismiss.index('rows[id]?["seenAt"] = Date().timeIntervalSince1970'), dismiss.index("dismissed.insert(id)"))   # × restarts its 10 minutes, as atticus.py saves it
         self.assertIn('if row["status"] as? String == "needs-you" || finished { dismissed.remove(id) }', panels)   # a finish shows again, as on the page
         self.assertIn('let finished = Self.live.contains(rows[id]?["status"] as? String ?? "") && Self.lingers(row)', panels)
-        self.assertIn('js(surface,"prefs",["dismissed":Array(dismissed)', panels)
+        self.assertIn('shelfModel.receive("prefs", ["dismissed":Array(dismissed)', panels)
 
     def test_shelf_hover_starts_on_the_mouse_event_not_a_poll_or_timer(self):
         panels = self.swift[self.swift.index("final class AgentPanels"):self.swift.index("final class RoutineWake")]
@@ -438,12 +438,11 @@ print("shelf follows")
         self.assertNotIn("mouseMoved", init)
         tick = panels[panels.index("    func tick()"):panels.index("    func open(")]
         hidden = tick[tick.index("if hidden || !hasChips {"):tick.index("            else {")]
-        self.assertIn('if shelf.isVisible { shelf.orderOut(nil); js("shelf","visible",false); pointerNext = []; flushPointer() }', hidden)
+        self.assertIn('if shelf.isVisible { shelf.orderOut(nil); js("shelf","visible",false); _ = shelfModel.pointer([]); if pointerHand { pointerHand = false; NSCursor.arrow.set() } }', hidden)
         self.assertIn("moves.forEach(NSEvent.removeMonitor); moves = []", hidden)
         shown = tick[tick.index("            else {"):tick.index("follow()")]
         self.assertLess(shown.index("if moves.isEmpty {"), shown.index("addGlobalMonitorForEvents(matching:.mouseMoved)"))
-        ready = panels[panels.index('        case "ready":'):panels.index('        case "size":')]
-        self.assertIn('js(surface,"visible",shelf?.isVisible == true)', ready)   # a preloaded shelf starts hidden
+        self.assertIn('shelfModel.receive("visible", !preload)', panels)   # a preloaded shelf starts hidden
 
     def test_each_agent_from_one_ask_swims_to_its_own_orb(self):
         # Oct 21: one moveFrom was taken by the first offer, so later agents from the same ask landed with no swim;
@@ -457,8 +456,8 @@ print("shelf follows")
         self.assertIn("asyncAfter(deadline:.now() + 0.4) { [weak self] in self?.launch() }", accept)   # an offer that never comes holds no swim
         launch = panels[panels.index("    func launch()"):panels.index("    func placeShelf(")]
         self.assertIn("moveFrom = [:]", launch)
-        self.assertIn("agents.slot('\\(id)')", launch)
-        fly = panels[panels.index("    func fly("):panels.index("    func makeWeb(")]
+        self.assertIn("self?.fly(id,from:from,to:self?.shelfModel.slot(id))", launch)   # after SwiftUI lays out the chips
+        fly = panels[panels.index("    func fly("):panels.index("    func makeShelf(")]
         self.assertNotIn("flight?.orderOut(nil)", fly)   # a second swim no longer cuts off the first
 
     def test_every_floating_surface_jumps_to_the_pointer_display_through_one_check(self):
@@ -474,7 +473,7 @@ print("shelf follows")
             self.assertIn("pointerFollow(", body)
             for slide in ["animator()", "NSAnimationContext", "glide(", "animate: true", "PanelFrame.follow("]:
                 self.assertNotIn(slide, body)
-        self.assertEqual(self.swift.count("pointerFollow("), 4)   # definition, box, shelf check and shelf move: no per-panel copies
+        self.assertEqual(self.swift.count("pointerFollow("), 3)   # definition, box and shelf: no per-panel copies
         self.assertEqual(self.swift.count("PanelFrame.follow("), 1)
         show = self.swift[self.swift.index("    func show()"):self.swift.index("    func hide(")]
         self.assertIn("startFollowingPointerScreen()", show)   # the dictation pill opens through show() too
