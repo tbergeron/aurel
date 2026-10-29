@@ -130,9 +130,42 @@ precondition(DictationData.fixed("Sarth") == "Sarth", "forgotten swap")
 print("learned fixes ok")
 '''
         self.assertIn('learned fixes ok', run_swift(self, swift))
-        self.assertIn('let value = DictationData.fixed(heard)', source)   # every insert path goes through insertDictation
+        self.assertIn('fitted(DictationData.fixed(rest), into: target)', source)   # every insert path goes through insertDictation
         self.assertIn('DictationData.fix(fix.heard, word)', source)
         self.assertEqual(source.count('DictationData.forget('), 2)   # Undo and Settings remove both drop the fix
+
+    def test_words_fit_the_text_around_the_cursor(self):
+        source = (ROOT / 'Atticus.swift').read_text()
+        store = source[source.index('enum DictationData {'):source.index('enum Prefs {')]
+        swift = r"""import AppKit
+struct Prefs {
+    static var path = "/tmp/unused-atticus-dictation-test/settings.json"
+    static var d: [String: Any] = ["dictateWords": ["Saarth"]]
+    static func bool(_ k: String) -> Bool { false }
+    static func set(_ k: String, _ v: Any) -> Bool { d[k] = v; return true }
+}
+""" + store + r"""
+func check(_ heard: String, _ before: String, _ after: String, _ want: String) {
+    let got = DictationData.fit(heard, before: before, after: after)
+    precondition(got == want, "\(heard) between \(before.debugDescription) and \(after.debugDescription): \(got.debugDescription)")
+}
+check("Hello there.", "", "", "Hello there.")                                  // an empty field: as heard
+check("See you Thursday.", "Sounds good,", "", " see you Thursday.")           // mid-sentence: a space, lowercase
+check("See you Thursday.", "Sounds good, ", "", "see you Thursday.")           // the space is already there
+check("thanks.", "Done.", "", " Thanks.")                                        // after a sentence: capital
+check("thanks.", "Done.\n", "", "Thanks.")                                       // a new line starts a sentence
+check("Quick brown.", "The ", " fox jumps", "quick brown")                     // the sentence goes on: no period
+check("Next one.", "Done. ", " Then more.", "Next one.")                        // before a new sentence: the period stays
+check("Word", "(", ")", "word")                                                  // inside brackets: no spaces
+check("Ok", "Say ", "now", "ok ")                                                // more text right after: a space
+check("I think so.", "Well, ", "", "I think so.")                               // I stays capital
+check("NASA called.", "Then ", "", "NASA called.")                              // acronyms stay
+check("iPhone is here.", "My ", "", "iPhone is here.")                         // mixed case stays
+check("Saarth said hi.", "Then ", "", "Saarth said hi.")                        // Dictionary words keep their case
+check(", and more", "Apples", "", ", and more")                                 // punctuation sticks to the word before
+print("fit ok")
+"""
+        self.assertIn('fit ok', run_swift(self, swift))
 
     def test_dictionary_reaches_cleanup_and_keeps_saved_rules(self):
         import atticus
@@ -211,7 +244,7 @@ print("learned fixes ok")
 class DictationUIDataTests(unittest.TestCase):
     def test_dictionary_and_history_actions_use_text_and_search_raw(self):
         page = (ROOT / 'ui/settings.html').read_text()
-        code = page[page.index('  const svg = d =>'):page.index("  $('agentsnav').onclick")]
+        code = page[page.index('  const svg = d =>'):page.index("  document.querySelectorAll('nav button[data-s] .ni')")]
         script = r'''const assert = (x, m) => { if (!x) throw Error(m); };
 class Element {
   constructor() { this.children = []; this.value = ''; this.style = {}; }

@@ -28,17 +28,6 @@ class BrainTests(unittest.TestCase):
     def setUp(self):
         self.root = scratch_dir(self)   # never the user's real log, chat or rules (and CI has no ~/.config/atticus)
 
-    def test_custom_server_replaces_claude_sign_in_and_models(self):
-        self.assertEqual(atticus.server(), {})   # empty address: plain Claude
-        prefs = {'apiBase': ' https://api.deepseek.com/anthropic ', 'apiKey': '', 'apiModel': 'deepseek-chat'}
-        with patch.object(atticus, 'pref', side_effect=lambda k, d: prefs.get(k, d)), patch.object(atticus.shutil, 'which', return_value='/bin/claude'), \
-             patch.object(atticus.subprocess, 'run', side_effect=AssertionError('no Claude sign-in check')):
-            env = atticus.server()
-            self.assertEqual(env['ANTHROPIC_BASE_URL'], 'https://api.deepseek.com/anthropic')
-            self.assertEqual((env['ANTHROPIC_AUTH_TOKEN'], env['ANTHROPIC_API_KEY']), ('none', ''))
-            self.assertEqual({env[f'ANTHROPIC_DEFAULT_{m}_MODEL'] for m in ('HAIKU', 'SONNET', 'OPUS')}, {'deepseek-chat'})
-            self.assertEqual(atticus.plan(), {'ok': True, 'need': '', 'text': 'Using your custom server, api.deepseek.com.', 'client': 'server'})
-
     def test_unlaunchable_claude_is_setup_instead_of_a_crash(self):
         with patch.object(atticus, 'start_claude', return_value=None), \
              patch.object(atticus.subprocess, 'run', side_effect=PermissionError(13, 'private path')), \
@@ -49,158 +38,6 @@ class BrainTests(unittest.TestCase):
             self.assertEqual((steps, commands, atticus.run.why), (0, [], 'setup_needed'))
             atticus.report_worker_failure('claude', 'haiku', atticus.run.why)
             error.assert_called_once_with('setup', worker='claude', model='haiku', why='setup_needed')
-
-    def test_custom_server_models_come_from_the_server(self):
-        from http.server import BaseHTTPRequestHandler, HTTPServer
-        class Fake(BaseHTTPRequestHandler):   # DeepSeek-style: the Claude address ends in /anthropic, the list is at /models
-            def do_GET(self):
-                ok = self.path == '/models' and self.headers['Authorization'] == 'Bearer k'
-                self.send_response(200 if ok else 404); self.end_headers()
-                if ok: self.wfile.write(b'{"data": [{"id": "a"}, {"id": "b"}]}')
-            def log_message(self, *a): pass
-        srv = HTTPServer(('127.0.0.1', 0), Fake)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
-        prefs = {'apiBase': f'http://127.0.0.1:{srv.server_port}/anthropic', 'apiKey': 'k'}
-        with patch.object(atticus, 'pref', side_effect=lambda k, d: prefs.get(k, d)):
-            self.assertEqual(atticus.models(), ['a', 'b'])
-            with patch.object(atticus, '_models_at', side_effect=TypeError):   # {"data": null} from a real server
-                self.assertEqual(atticus.models(), [])
-            prefs['apiBase'] = 'http://127.0.0.1:1'   # nothing listening
-            self.assertEqual(atticus.models(), [])
-        self.assertEqual(atticus.models(), [])   # no address
-
-    def test_malformed_custom_server_is_reported_without_crashing(self):
-        prefs = {'apiBase': 'http://[', 'apiModel': 'fixture'}
-        with patch.object(atticus, 'pref', side_effect=lambda k, d: prefs.get(k, d)), \
-             patch.object(atticus.shutil, 'which', return_value='/fake/claude'):
-            self.assertEqual(atticus.models(), [])
-            self.assertEqual(atticus.plan(), {'ok': False, 'need': '', 'text': 'Enter a valid custom server address in Settings.', 'client': 'server'})
-
-    def test_local_server_discovery_uses_v1_models(self):
-        from http.server import BaseHTTPRequestHandler, HTTPServer
-        class Fake(BaseHTTPRequestHandler):
-            paths = []
-            def do_GET(self):
-                self.paths.append(self.path); self.send_response(200); self.end_headers()
-                self.wfile.write(b'{"data": [{"id": "local-model"}]}')
-            def log_message(self, *a): pass
-        srv = HTTPServer(('127.0.0.1', 0), Fake)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
-        port = srv.server_port
-        with patch.dict(os.environ, {'http_proxy': 'http://127.0.0.1:1', 'no_proxy': '', 'NO_PROXY': ''}), \
-             patch.object(atticus, 'LOCAL_SERVERS', (('Fixture', f'http://localhost:{port}', f'http://127.0.0.1:{port}'),)):
-            self.assertEqual(atticus.local_servers(), [{'name': 'Fixture', 'base': f'http://localhost:{port}', 'models': ['local-model']}])
-        self.assertEqual(Fake.paths, ['/v1/models'])
-
-    def test_local_discovery_does_not_follow_redirects(self):
-        from http.server import BaseHTTPRequestHandler, HTTPServer
-        class Fake(BaseHTTPRequestHandler):
-            paths = []
-            def do_GET(self):
-                self.paths.append(self.path)
-                self.send_response(302 if self.path == '/v1/models' else 200)
-                self.send_header('Location', '/elsewhere'); self.end_headers()
-                if self.path != '/v1/models': self.wfile.write(b'{"data": [{"id": "remote"}]}')
-            def log_message(self, *a): pass
-        srv = HTTPServer(('127.0.0.1', 0), Fake)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
-        base = f'http://127.0.0.1:{srv.server_port}'
-        with patch.object(atticus, 'LOCAL_SERVERS', (('Fixture', base, base),)):
-            self.assertEqual(atticus.local_servers(), [])
-        self.assertEqual(Fake.paths, ['/v1/models'])
-
-    def test_local_discovery_has_a_total_response_deadline(self):
-        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-        class Fake(BaseHTTPRequestHandler):
-            def do_GET(self):
-                self.send_response(200); self.end_headers()
-                try:
-                    for _ in range(40):
-                        self.wfile.write(b' '); self.wfile.flush(); time.sleep(.05)
-                except (BrokenPipeError, ConnectionResetError): pass
-            def log_message(self, *a): pass
-        srv = ThreadingHTTPServer(('127.0.0.1', 0), Fake)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
-        base = f'http://127.0.0.1:{srv.server_port}'
-        started = time.monotonic()
-        with patch.object(atticus, 'LOCAL_SERVERS', (('Fixture', base, base),)):
-            self.assertEqual(atticus.local_servers(), [])
-        self.assertLess(time.monotonic() - started, 1.5)
-
-    def test_custom_server_env_reaches_anthropic_messages_endpoint(self):
-        from http.server import BaseHTTPRequestHandler, HTTPServer
-        class Fake(BaseHTTPRequestHandler):
-            request = None
-            def do_POST(self):
-                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-                Fake.request = (self.path, self.headers['Authorization'], body)
-                self.send_response(200); self.end_headers()
-                self.wfile.write(b'{"content": [{"type": "text", "text": "Local answer."}]}')
-            def log_message(self, *a): pass
-        srv = HTTPServer(('127.0.0.1', 0), Fake)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
-        fake = self.root / 'claude'
-        fake.write_text(f'''#!{sys.executable}
-import json, os, sys, urllib.request
-turn = json.loads(sys.stdin.readline())
-payload = json.dumps({{"model": os.environ["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "messages": [turn["message"]]}}).encode()
-req = urllib.request.Request(os.environ["ANTHROPIC_BASE_URL"] + "/v1/messages", data=payload,
-    headers={{"Content-Type": "application/json", "Authorization": "Bearer " + os.environ["ANTHROPIC_AUTH_TOKEN"]}})
-answer = json.load(urllib.request.urlopen(req))["content"][0]["text"]
-print(json.dumps({{"type": "result", "result": answer, "total_cost_usd": 0}}))
-''')
-        fake.chmod(0o755)
-        prefs = {'apiBase': f'http://127.0.0.1:{srv.server_port}', 'apiKey': 'fixture-key', 'apiModel': 'local-model'}
-        with patch.object(atticus, 'pref', side_effect=lambda k, d: prefs.get(k, d)), \
-             patch.object(atticus.signal, 'signal'), patch.object(atticus.atexit, 'register'), \
-             python_fixture_cli(), \
-             patch.dict(os.environ, {'ATTICUS_CLAUDE': str(fake)}):
-            reply, cost, _ = atticus.run('Request: hello', atticus.start_claude())
-        self.assertEqual((reply, cost), ('Local answer.', 0))
-        self.assertEqual(Fake.request[:2], ('/v1/messages', 'Bearer fixture-key'))
-        self.assertEqual(Fake.request[2]['model'], 'local-model')
-
-    def test_custom_server_auth_error_does_not_open_claude_sign_in(self):
-        fake = self.root / 'claude'
-        fake.write_text(f'''#!{sys.executable}
-import json, sys
-sys.stdin.readline()
-print(json.dumps({{"type": "result", "is_error": True, "result": "Authentication failed", "total_cost_usd": 0}}))
-''')
-        fake.chmod(0o755)
-        prefs = {'apiBase': 'http://127.0.0.1:1', 'apiKey': 'wrong', 'apiModel': 'local-model'}
-        with patch.object(atticus, 'pref', side_effect=lambda k, d: prefs.get(k, d)), \
-             patch.object(atticus.signal, 'signal'), patch.object(atticus.atexit, 'register'), \
-             patch.object(atticus, 'say') as say, python_fixture_cli(), \
-             patch.dict(os.environ, {'ATTICUS_CLAUDE': str(fake)}):
-            reply, _, _ = atticus.run('Request: hello', atticus.start_claude())
-        self.assertEqual(reply, 'Your custom server rejected its credentials. Check its key in Settings.')
-        self.assertFalse(any(call.args[:2] == ('!', 'setup') for call in say.call_args_list))
-
-    def test_custom_server_retries_an_image_rejection_without_images(self):
-        class Input(io.StringIO):
-            def close(self): pass
-        def worker(result, failed):
-            p = unittest.mock.Mock(ask='', returncode=int(failed), errors=io.StringIO(), atticus_model='haiku')
-            p.stdin = Input()
-            p.stdout = [json.dumps({'type': 'result', 'result': result, 'is_error': failed, 'total_cost_usd': 0})]
-            return p
-        shot = self.root / 'screen.jpg'
-        shot.write_bytes(b'fixture')
-        first = worker('API Error: 400 Multimodal data provided, but model does not support multimodal requests.', True)
-        retry = worker('Done without the picture.', False)
-        with patch.object(atticus, 'server', return_value={'ANTHROPIC_BASE_URL': 'fixture'}), \
-             patch.object(atticus, 'start_claude', return_value=retry) as start, patch.object(atticus, 'say'):
-            reply, _, _ = atticus.run('Arrange the windows', first, [(str(shot), 'Screen 1')])
-        start.assert_called_once_with('haiku')
-        self.assertEqual(reply, 'Done without the picture.')
-        self.assertIn('image', [b['type'] for b in json.loads(first.stdin.getvalue())['message']['content']])
-        self.assertNotIn('image', [b['type'] for b in json.loads(retry.stdin.getvalue())['message']['content']])
 
     def test_routing_migrates_legacy_choices_and_honors_one_mode(self):
         cases = [({}, 'balanced'), ({'escalate': False}, 'cheapest'),
@@ -213,9 +50,6 @@ print(json.dumps({{"type": "result", "is_error": True, "result": "Authentication
                 self.assertEqual(atticus.routing_mode(), expected)
                 self.assertEqual(atticus.main_model(), atticus.work_model() if expected == 'capable' else 'haiku')
                 self.assertEqual(atticus.agent_model(), 'haiku' if expected == 'cheapest' else atticus.work_model())
-        with patch.object(atticus, 'pref', side_effect=lambda k,d:{'apiBase':'https://fixture.invalid', 'routing':'capable', 'model':'haiku', 'apiModel':'custom'}.get(k,d)):
-            self.assertEqual(atticus.main_model(), 'haiku')  # server() maps the alias to its chosen model
-            self.assertEqual(atticus.agent_model(), 'custom')
 
     def routing_ask(self, prefs, outcomes, *, quick=None, retry='n', tip=None, why=''):
         def attempt(*args, **kwargs):
@@ -271,16 +105,6 @@ print(json.dumps({{"type": "result", "is_error": True, "result": "Authentication
             with self.subTest(why=why), patch.object(atticus, 'report_error') as sent:
                 self.routing_ask({'routing': 'cheapest'}, [('Not done.', False, [])], why=why)
             sent.assert_called_once_with(kind, worker='claude', model='haiku', why=why)
-
-    def test_custom_server_failure_checks_its_actual_available_models(self):
-        for available, why in [(['available-model'], 'model_missing'), (['chosen-model'], 'stopped'), ([], 'stopped')]:
-            p = unittest.mock.Mock(ask='', returncode=1, stdin=io.StringIO(), stdout=[], errors=io.StringIO('Unrecognized backend failure'))
-            with self.subTest(available=available), patch.object(atticus, 'server', return_value={'ANTHROPIC_BASE_URL': 'fixture'}), \
-                 patch.object(atticus, 'pref', side_effect=lambda k, d: 'chosen-model' if k == 'apiModel' else d), \
-                 patch.object(atticus, 'models', return_value=available) as models, \
-                 patch.object(atticus, 'plan', return_value={'ok': True}), patch.object(atticus, 'say'):
-                atticus.run('Fixture task', p)
-            self.assertEqual(atticus.run.why, why); models.assert_called_once()
 
     def test_missing_backend_preconditions_keep_the_setup_reason(self):
         for need, why in [('login', 'signed_out'), ('install', 'setup_needed')]:
@@ -387,7 +211,7 @@ print(json.dumps({{"type": "result", "is_error": True, "result": "Authentication
         for mode in ('cheapest','balanced','capable'):
             brain, start, ask, _ = self.routing_ask({'routing':mode}, [], quick='Done instantly.')
             brain.assert_not_called(); start.assert_not_called(); ask.assert_not_called()
-        for prefs in ({'client':'devin'}, {'client':'pi'}, {'apiBase':'https://fixture.invalid'}):
+        for prefs in ({'client':'local'},):
             brain, start, ask, _ = self.routing_ask(prefs, [('Answer.',True,[])])
             self.assertEqual(brain.call_count,1); start.assert_not_called()
             self.assertNotIn(atticus.MODEL_OFFER,brain.call_args.args[0])
@@ -604,27 +428,6 @@ print(json.dumps({{"type": "result", "is_error": True, "result": "Authentication
             atticus.tip('Done.', 'Learned: Procedure saved for next time.')
         self.assertIn('Learned: Procedure saved for next time.', out.getvalue())
 
-    def test_tip_jar_line_has_its_own_switch_and_clock(self):
-        with tempfile.TemporaryDirectory() as d, patch.object(atticus, 'DIR', d), patch.dict(os.environ, {'ATTICUS_UI': '1'}):
-            def ask(prefs, reply='Done.'):
-                with patch.object(atticus, 'pref', side_effect=lambda k, v: prefs.get(k, v)), patch('sys.stdout', new_callable=io.StringIO) as out:
-                    atticus.tip(reply)
-                return out.getvalue()
-            self.assertEqual(ask({}), '')   # first ask: nothing
-            os.remove(os.path.join(d, 'kofi'))
-            self.assertEqual(ask({}), '')   # an install from before the tip jar: no crash, its clock starts
-            old = time.time() - 5 * 3600
-            os.utime(os.path.join(d, 'kofi'), (old, old)); os.utime(os.path.join(d, 'tip'), (old, old))
-            self.assertEqual(ask({'support': False}).count('Support: '), 0)
-            with patch.object(atticus, 'posthog') as sent:
-                self.assertIn('Support: ', ask({'tips': False, 'support': True}))   # tips off, tip jar on
-            sent.assert_called_once_with('support', {'action': 'shown', 'from': 'overlay'})
-            self.assertNotIn('Support: ', ask({}))   # 4 h clock restarted: the plain tip is next
-            os.utime(os.path.join(d, 'kofi'), (old, old))
-            self.assertNotIn('Support: ', ask({'tips': False}))   # tips turned off before the tip jar existed: it stays off too
-            with patch.object(atticus, 'failed_action_reply', return_value=True):
-                self.assertNotIn('Support: ', ask({}, 'Could not join Zoom.'))   # never right after a miss
-
     def test_domain_dots_and_url_case_survive(self):
         with patch.object(atticus, 'skills', return_value={}), \
              patch.object(atticus.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
@@ -803,269 +606,17 @@ print(json.dumps(atticus.look(cleanup=sys.argv[3] != 'standalone')))
             move.record(use)
             self.assertIn('w', move.trace)
 
-    def test_devin_gate_blocks_before_confirmation_and_records_confirmed_steps(self):
-        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {'ATTICUS_ASK': root, 'ATTICUS_CLIENT': 'devin'}):
-            event = {'tool_name': 'exec', 'tool_input': {'command': 'echo hello'}}
-            with patch.object(atticus, 'wait_commit', return_value=False), \
-                 patch('sys.stdin', io.StringIO(json.dumps(event))), patch('sys.stdout', new_callable=io.StringIO) as out:
-                atticus.gate()
-            self.assertEqual(json.loads(out.getvalue())['decision'], 'block')
-            self.assertFalse(Path(root, 'devin-tools.jsonl').exists())
-            with patch.object(atticus, 'wait_commit', return_value=True), patch.object(atticus, 'pref', return_value=False), patch.object(atticus, 'preview_commands'), \
-                 patch('sys.stdin', io.StringIO(json.dumps(event))), patch('sys.stdout', new_callable=io.StringIO) as out:
-                atticus.gate()
-            row = json.loads(Path(root, 'devin-tools.jsonl').read_text())
-            self.assertEqual(json.loads(out.getvalue())['decision'], 'approve')
-            self.assertEqual(row['input']['command'], 'echo hello')
-            self.assertTrue(any(p.name.startswith('hands-devin-') for p in Path(root).iterdir()))
-            blocked = {'tool_name': 'write', 'tool_input': {'path': '/tmp/file'}}
-            with patch.object(atticus, 'wait_commit', return_value=True), \
-                 patch('sys.stdin', io.StringIO(json.dumps(blocked))), patch('sys.stdout', new_callable=io.StringIO) as out:
-                atticus.gate()
-            self.assertEqual(json.loads(out.getvalue())['decision'], 'block')
-
-    def test_devin_does_not_start_before_confirmation(self):
-        with tempfile.TemporaryDirectory() as root:
-            fake, marker = Path(root, 'devin'), Path(root, 'started')
-            fake.write_text(f'#!{sys.executable}\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n')
-            fake.chmod(0o755)
-            with patch.dict(os.environ, {'PATH': root + os.pathsep + os.environ['PATH']}), \
-                 patch.object(atticus, 'wait_commit', return_value=False):
-                reply, _, _ = atticus.run_devin('unconfirmed')
-            self.assertIn('cancelled', reply)
-            self.assertFalse(marker.exists())
-
-    def test_devin_uses_normal_mode_gate_and_deny_rules(self):
-        with tempfile.TemporaryDirectory() as root:
-            fake, log, removed = Path(root, 'devin'), Path(root, 'launch.json'), Path(root, 'removed')
-            fake.write_text(f'''#!{sys.executable}
-import json, os, sys
-from pathlib import Path
-if sys.argv[1:3] == ['auth', 'status']: raise SystemExit(0)
-if sys.argv[1:3] == ['list', '--format']:
-    print(json.dumps([{{'id': 'fixture-session', 'cwd': os.getcwd()}}])); raise SystemExit(0)
-if sys.argv[1:2] == ['rm']:
-    Path(os.environ['DEVIN_REMOVED']).write_text(' '.join(sys.argv[1:])); raise SystemExit(0)
-Path(os.environ['DEVIN_LOG']).write_text(json.dumps(sys.argv[1:]))
-print('Ready.')
-''')
-            fake.chmod(0o755)
-            previous = signal.getsignal(signal.SIGTERM)
-            try:
-                with patch.dict(os.environ, {'PATH': root + os.pathsep + os.environ['PATH'], 'DEVIN_LOG': str(log), 'DEVIN_REMOVED': str(removed)}), \
-                     patch.object(atticus, 'pref', side_effect=lambda k, d: 'devin' if k == 'client' else False if k == 'safe' else d):
-                    self.assertEqual(atticus.run_devin('Context: old Request: distractor', request='Write a note titled Request: Vacation')[0], 'Ready.')
-            finally:
-                signal.signal(signal.SIGTERM, previous)
-            args = json.loads(log.read_text())
-            self.assertNotIn('dangerous', args)
-            prompt = args[args.index('-p') + 1]
-            self.assertIn('Context: old Request: distractor', prompt)
-            self.assertTrue(prompt.endswith('THE CURRENT USER REQUEST (do this now):\nWrite a note titled Request: Vacation'))
-            self.assertEqual(Path(atticus.request_file(Path(args[args.index('--config') + 1]).parent.parent)).read_text(), 'Write a note titled Request: Vacation')
-            self.assertEqual(args[args.index('--permission-mode') + 1], 'normal')
-            config = json.loads(Path(args[args.index('--config') + 1]).read_text())
-            self.assertIn('PreToolUse', config['hooks'])
-            self.assertIn('exec', config['permissions']['allow'])
-            self.assertIn('Fetch(*)', config['permissions']['allow'])
-            self.assertTrue(all(f'Exec({cmd})' in config['permissions']['deny'] for cmd in atticus.DENIED))
-            self.assertIn('mcp__*', config['permissions']['deny'])
-            self.assertIn('ATTICUS_CLIENT=devin', config['hooks']['PreToolUse'][0]['hooks'][0]['command'])
-            self.assertIn('|| exit 2', config['hooks']['PreToolUse'][0]['hooks'][0]['command'])
-            self.assertEqual(removed.read_text(), 'rm fixture-session --force')
-
-    def test_devin_hook_failure_exits_two(self):
-        with tempfile.TemporaryDirectory() as root:
-            command = json.loads(Path(atticus.devin_config(root)).read_text())['hooks']['PreToolUse'][0]['hooks'][0]['command']
-            result = subprocess.run(command, shell=True, input='{', text=True, capture_output=True)
-        self.assertEqual(result.returncode, 2)
-
-    def test_failed_devin_output_is_not_success(self):
-        with tempfile.TemporaryDirectory() as root:
-            fake = Path(root, 'devin')
-            fake.write_text(f'''#!{sys.executable}
-import json, sys
-if sys.argv[1:3] == ['auth', 'status']: raise SystemExit(0)
-if sys.argv[1:3] == ['list', '--format']: print(json.dumps([])); raise SystemExit(0)
-print('Claimed success.')
-print('fixture failure', file=sys.stderr)
-raise SystemExit(4)
-''')
-            fake.chmod(0o755)
-            previous = signal.getsignal(signal.SIGTERM)
-            try:
-                with patch.dict(os.environ, {'PATH': root + os.pathsep + os.environ['PATH']}), \
-                     patch.object(atticus, 'pref', side_effect=lambda k, d: 'devin' if k == 'client' else False if k == 'safe' else d):
-                    reply, _, _ = atticus.run_devin('test')
-            finally:
-                signal.signal(signal.SIGTERM, previous)
-            self.assertIn('Devin stopped: fixture failure.', reply)
-            self.assertIn('choose Set Up', reply)
-            self.assertFalse(atticus.run.ok)
-
-    def test_devin_cleanup_failure_keeps_the_answer_and_does_not_retry_the_task(self):
-        with tempfile.TemporaryDirectory() as root:
-            fake = Path(root, 'devin')
-            fake.write_text(f'''#!{sys.executable}
-import json, sys
-if sys.argv[1:3] == ['list', '--format']: print(json.dumps([])); raise SystemExit(0)
-print('Ready.')
-''')
-            fake.chmod(0o755)
-            previous = signal.getsignal(signal.SIGTERM)
-            try:
-                with patch.dict(os.environ, {'PATH': root + os.pathsep + os.environ['PATH']}), \
-                     patch.object(atticus, 'pref', side_effect=lambda k, d: 'devin' if k == 'client' else False if k == 'safe' else d):
-                    reply, _, _ = atticus.run_devin('test')
-            finally:
-                signal.signal(signal.SIGTERM, previous)
-            self.assertIn('Ready.', reply)
-            self.assertIn('could not delete Devin’s saved session', reply)
-            self.assertTrue(atticus.run.ok)
-
-    def test_devin_timeout_is_not_relabelled_as_a_generic_crash(self):
-        process = unittest.mock.Mock(pid=123, returncode=-signal.SIGKILL, ask='')
-        process.communicate.side_effect = subprocess.TimeoutExpired(['devin'], 180)
-        process.stdout.close = unittest.mock.Mock()
-        with patch.object(atticus.shutil, 'which', return_value='/fake/devin'), \
-             patch.object(atticus.subprocess, 'Popen', return_value=process), \
-             patch.object(atticus, 'stop_claude'), patch.object(atticus, 'delete_devin_session', return_value=True), \
-             patch.object(atticus, 'relay'), patch.object(atticus.signal, 'signal'), patch.object(atticus.atexit, 'register'):
-            reply, _, _ = atticus.run_devin('test')
-        self.assertEqual(reply, 'Devin timed out before finishing. Please try again.')
-        self.assertFalse(atticus.run.ok)
-
-    def test_external_client_errors_do_not_expose_tracebacks(self):
-        for client in ('pi', 'devin'):
-            with self.subTest(client=client):
-                fake = self.root / client
-                fake.write_text(f'#!{sys.executable}\nimport sys\nprint("Traceback: fixture/internal.py line 12", file=sys.stderr)\nraise SystemExit(4)\n')
-                fake.chmod(0o755)
-                previous = signal.getsignal(signal.SIGTERM)
-                try:
-                    with patch.dict(os.environ, {'PATH': str(self.root) + os.pathsep + os.environ['PATH']}), \
-                         patch.object(atticus, 'pref', side_effect=lambda k, d: client if k == 'client' else d), \
-                         patch.object(atticus, 'plan', return_value={'ok': True}), \
-                         patch.object(atticus, 'delete_devin_session', return_value=True), \
-                         python_fixture_cli():
-                        reply, _, _ = atticus.run('test')
-                finally:
-                    signal.signal(signal.SIGTERM, previous)
-                self.assertIn(f'{client.title()} stopped:', reply)
-                self.assertIn('choose Set Up', reply)
-                self.assertNotIn('fixture/internal.py', reply)
-                self.assertFalse(atticus.run.ok)
-
     def test_every_client_leaves_run_state_main_reads(self):
-        for name in ('pi', 'devin'):
+        for name in ('local',):
             atticus.run.__dict__.clear()
             with patch.object(atticus, 'client', return_value=name), patch.object(atticus, 'run_' + name, return_value=('x', 0, 0)):
                 atticus.run('task')
             self.assertEqual((atticus.run.work, atticus.run.observed, atticus.run.handoffs), (False, [], []))
 
-    def test_pi_does_not_start_before_confirmation(self):
-        with tempfile.TemporaryDirectory() as root:
-            fake, marker = Path(root, 'pi'), Path(root, 'started')
-            fake.write_text(f'#!{sys.executable}\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n')
-            fake.chmod(0o755)
-            with patch.dict(os.environ, {'PATH': root + os.pathsep + os.environ['PATH']}), \
-                 patch.object(atticus, 'wait_commit', return_value=False):
-                reply, _, _ = atticus.run_pi('unconfirmed')
-            self.assertIn('cancelled', reply)
-            self.assertFalse(marker.exists())
-
-    def test_pi_auth_failure_reopens_setup(self):
-        fake = self.root / 'pi'
-        fake.write_text("import sys\nprint('No provider credentials; run /login', file=sys.stderr)\nraise SystemExit(1)\n")
-        fake.chmod(0o755)
-        with patch.dict(os.environ, {'PATH': str(self.root) + os.pathsep + os.environ['PATH']}), \
-             patch.object(atticus, 'wait_commit', return_value=True), patch.object(atticus, 'say') as say, \
-             patch.object(atticus, 'relay'), patch.object(atticus.signal, 'signal'), \
-             python_fixture_cli():
-            reply, _, _ = atticus.run_pi('test')
-        say.assert_called_with('!', 'setup')
-        self.assertEqual(reply, 'Pi needs a provider and model. Open Atticus Settings, choose Set Up, then try again.')
-        self.assertEqual(atticus.run.why, 'provider_needed')
-
-    def test_pi_json_errors_are_failures_even_when_the_cli_exits_zero(self):
-        from types import SimpleNamespace
-        cases = [
-            ('error', '401 credentials expired', '', 'signed_out', True, 'choose Set Up'),
-            ('error', '429 usage limit reached', '', 'plan_limit', False, 'after the limit resets'),
-            ('error', '429 too many requests', '', 'rate_limited', False, 'try again in a moment'),
-            ('error', 'Prompt is too long', '', 'too_long', False, 'Close this box with ✕ to start fresh'),
-            ('error', 'Unknown provider model', '', 'provider_needed', True, 'Pi needs a provider and model'),
-            ('error', 'Service rejected request', '', 'stopped', True, 'choose Set Up'),
-            ('error', 'Service unavailable', '', 'unavailable', False, 'temporarily unavailable'),
-            ('error', 'Error: Unknown option: --no-mcp', '', 'outdated', False, 'Update Pi, then try again.'),
-            ('aborted', 'Request aborted', '', 'cancelled', False, 'cancelled'),
-            ('stop', '', 'Network connection failed', 'offline', False, 'Check your internet connection'),
-            ('stop', '', '', 'no_reply', False, 'empty answer'),
-        ]
-        for reason, detail, stderr, why, opens_setup, guidance in cases:
-            with self.subTest(reason=reason, detail=detail, stderr=stderr):
-                message = {'role': 'assistant', 'stopReason': reason, 'errorMessage': detail,
-                           'content': [{'type': 'text', 'text': 'Partial answer'}] if reason == 'error' else []}
-                def spawn(args, **kwargs):
-                    kwargs['stderr'].write(stderr)
-                    return SimpleNamespace(stdout=io.StringIO(json.dumps({'type': 'message_end', 'message': message}) + '\n'),
-                                           returncode=0, wait=lambda: 0, poll=lambda: 0)
-                atticus.run.why = ''
-                with patch.object(atticus.shutil, 'which', return_value='/fixture/pi'), \
-                     patch.object(atticus, 'wait_commit', return_value=True), patch.object(atticus, 'say') as say, \
-                     patch.object(atticus, 'relay'), patch.object(atticus.signal, 'signal'), \
-                     patch.object(atticus.atexit, 'register'), patch.object(atticus.subprocess, 'Popen', side_effect=spawn), \
-                     patch.object(atticus, 'read_rows', return_value=[{'tool': 'exec', 'input': {'command': 'echo fixture'}}]):
-                    reply, _, _ = atticus.run_pi('fixture request')
-                self.assertFalse(atticus.run.ok)
-                self.assertEqual(atticus.run.cmds, [])
-                self.assertEqual(atticus.run.why, why)
-                self.assertIn(guidance, reply)
-                if opens_setup: say.assert_called_once_with('!', 'setup')
-                else: say.assert_not_called()
-                if (reason == 'error' or stderr) and why not in ('signed_out', 'provider_needed', 'too_long', 'outdated'):
-                    self.assertIn(detail or stderr, reply)
-                    self.assertNotIn('empty answer', reply)
-
-    def test_pi_ignores_malformed_events_and_uses_json_mode_images_and_atticus_gate(self):
-        with tempfile.TemporaryDirectory() as root:
-            fake, log, frame = Path(root, 'pi'), Path(root, 'launch.json'), Path(root, 'frame.png')
-            frame.write_bytes(b'fixture')
-            fake.write_text(f'''#!{sys.executable}
-import json, os, sys
-from pathlib import Path
-Path(os.environ['PI_LOG']).write_text(json.dumps(sys.argv[1:]))
-print('null')
-print(json.dumps({{'type':'message_end','message':None}}))
-print(json.dumps({{'type':'message_end','message':{{'role':'assistant','content':None,'usage':None}}}}))
-print(json.dumps({{'type':'message_end','message':{{'role':'assistant','content':[{{'type':'text','text':'Ready.'}}],'usage':{{'cost':{{'total':0.012}}}}}}}}))
-''')
-            fake.chmod(0o755)
-            previous = signal.getsignal(signal.SIGTERM)
-            try:
-                with patch.dict(os.environ, {'PATH': root + os.pathsep + os.environ['PATH'], 'PI_LOG': str(log)}), \
-                     patch.object(atticus, 'pref', side_effect=lambda k, d: 'pi' if k == 'client' else False if k == 'safe' else d), \
-                     patch.object(atticus, 'wait_commit', return_value=True), python_fixture_cli():
-                    reply, usd, _ = atticus.run_pi('Context: old Request: distractor', [(str(frame), 'screen')], request='Write a note titled Request: Vacation')
-            finally:
-                signal.signal(signal.SIGTERM, previous)
-            self.assertEqual((reply, usd), ('Ready.', .012))
-            args = json.loads(log.read_text())
-            self.assertEqual(args[-2], '@' + str(frame))
-            self.assertIn('Context: old Request: distractor', args[-1])
-            self.assertTrue(args[-1].endswith('THE CURRENT USER REQUEST (do this now):\nWrite a note titled Request: Vacation'))
-            self.assertEqual(Path(atticus.request_file(Path(args[args.index('--extension') + 1]).parent)).read_text(), 'Write a note titled Request: Vacation')
-            self.assertEqual(args[args.index('--mode') + 1], 'json')
-            self.assertIn('--no-session', args)
-            self.assertEqual(args[args.index('--tools') + 1], 'bash,read,grep,find,ls')
-            extension = Path(args[args.index('--extension') + 1]).read_text()
-            self.assertIn('tool_call', extension)
-            self.assertIn('--gate', extension)
-
     def test_hook_and_helper_launch_runs_from_cached_bytecode_outside_the_app(self):
         home = Path(scratch_dir(self)); app = home / 'Atticus.app'; app.mkdir()
         script = app / 'atticus.py'; script.write_text(Path(atticus.ME).read_text())
-        env = {k: v for k, v in os.environ.items() if not k.startswith('ATTICUS_')} | {'HOME': str(home), 'ATTICUS_DIR': str(home), 'ATTICUS_CLIENT': 'pi'}
+        env = {k: v for k, v in os.environ.items() if not k.startswith('ATTICUS_')} | {'HOME': str(home), 'ATTICUS_DIR': str(home), 'ATTICUS_CLIENT': 'local'}
         event = json.dumps({'tool_name': 'exec', 'tool_input': {'command': 'env FIXTURE=1 rm /tmp/file'}})
         run = lambda *a, stdin='': subprocess.run([*a], input=stdin, env=env, capture_output=True, text=True, cwd=home, timeout=20)
         for args, stdin in ((['--gate'], event), (['--no-such-flag'], '')):
@@ -1077,18 +628,9 @@ print(json.dumps({{'type':'message_end','message':{{'role':'assistant','content'
             else: self.assertEqual(r.returncode, 2)
         self.assertTrue(list((home / 'Library/Caches/Atticus').rglob('atticus.*.pyc')))
         self.assertFalse((app / '__pycache__').exists())   # never written inside the signed app
-        hook = json.loads(Path(atticus.devin_config(str(home))).read_text())['hooks']['PreToolUse'][0]['hooks'][0]['command']
-        self.assertTrue(hook.startswith(f'ATTICUS_CLIENT=devin /bin/sh "{atticus.ME}" --gate'))
-
-    def test_pi_gate_blocks_wrapped_denied_commands(self):
-        event = {'tool_name': 'exec', 'tool_input': {'command': 'env FIXTURE=1 rm /tmp/file'}}
-        with patch.dict(os.environ, {'ATTICUS_CLIENT': 'pi'}), patch.object(atticus, 'wait_commit', return_value=True), \
-             patch('sys.stdin', io.StringIO(json.dumps(event))), patch('sys.stdout', new_callable=io.StringIO) as out:
-            atticus.gate()
-        self.assertEqual(json.loads(out.getvalue())['decision'], 'block')
 
     def test_external_gates_normalize_shell_quoting_before_hard_denials(self):
-        for client in ('pi', 'devin'):
+        for client in ('local',):
             for command in ("r''m /tmp/file", r'r\m /tmp/file', "echo ready;r''m /tmp/file", "g''it p''ush", "rm /tmp/file\necho '"):
                 with self.subTest(client=client, command=command):
                     event = {'tool_name': 'exec', 'tool_input': {'command': command}}
@@ -1097,58 +639,6 @@ print(json.dumps({{'type':'message_end','message':{{'role':'assistant','content'
                          patch('sys.stdin', io.StringIO(json.dumps(event))), patch('sys.stdout', new_callable=io.StringIO) as out:
                         atticus.gate()
                     self.assertEqual(json.loads(out.getvalue())['decision'], 'block')
-
-    def test_pi_safe_mode_asks_before_shell_commands(self):
-        event = {'tool_name': 'exec', 'tool_input': {'command': 'echo hello'}}
-        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {'ATTICUS_CLIENT': 'pi', 'ATTICUS_ASK': root}), \
-             patch.object(atticus, 'wait_commit', return_value=True), patch.object(atticus, 'pref', return_value=True), \
-             patch.object(atticus, 'ask_user', return_value='n') as ask, \
-             patch('sys.stdin', io.StringIO(json.dumps(event))), patch('sys.stdout', new_callable=io.StringIO) as out:
-            atticus.gate()
-            self.assertFalse(Path(root, 'pi-tools.jsonl').exists())
-        ask.assert_called_once()
-        self.assertEqual(json.loads(out.getvalue())['decision'], 'block')
-
-    def test_devin_fetch_tool_reaches_the_shared_gate(self):
-        event = {'tool_name': 'Fetch', 'tool_input': {'url': 'https://fixture.invalid'}}
-        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {'ATTICUS_CLIENT': 'devin', 'ATTICUS_ASK': root}), \
-             patch.object(atticus, 'wait_commit', return_value=True), patch.object(atticus, 'pref', return_value=False), \
-             patch('sys.stdin', io.StringIO(json.dumps(event))), patch('sys.stdout', new_callable=io.StringIO) as out:
-            atticus.gate()
-            row = json.loads(Path(root, 'devin-tools.jsonl').read_text())
-        self.assertEqual(json.loads(out.getvalue())['decision'], 'approve')
-        self.assertEqual(row['tool'], 'webfetch')
-
-    def test_pi_plan_only_requires_the_cli(self):
-        with patch.object(atticus.shutil, 'which', side_effect=[None, '/fake/pi']):
-            self.assertEqual(atticus.pi_plan()['need'], 'install')
-            self.assertTrue(atticus.pi_plan()['ok'])
-
-    def test_devin_auth_uses_status_exit_code(self):
-        ok = subprocess.CompletedProcess([], 0, stdout='localized output')
-        bad = subprocess.CompletedProcess([], 1, stdout='Logged in')
-        with patch.object(atticus.shutil, 'which', return_value='/fake/devin'), patch.object(atticus.subprocess, 'run', side_effect=[ok, bad]):
-            self.assertTrue(atticus.devin_plan()['ok'])
-            self.assertFalse(atticus.devin_plan()['ok'])
-
-    def test_custom_server_plan_needs_claude_code_not_an_account(self):
-        prefs = {'apiBase': 'http://localhost:11434', 'apiModel': 'qwen3'}
-        with patch.object(atticus, 'pref', side_effect=lambda k, d='': prefs.get(k, d)), patch.object(atticus.shutil, 'which', return_value=None):
-            c = atticus.plan()
-        self.assertEqual((c['client'], c['need']), ('server', 'install'))
-        with patch.object(atticus, 'pref', side_effect=lambda k, d='': prefs.get(k, d)), patch.object(atticus.shutil, 'which', return_value='/fake/claude'):
-            self.assertTrue(atticus.plan()['ok'])
-
-    def test_models_probe_uses_the_unsaved_server(self):
-        seen = []
-        def fake(req, timeout):
-            seen.append((req.full_url, req.headers.get('X-api-key')))
-            raise OSError
-        with patch.dict(os.environ, {'ATTICUS_PROBE_BASE': 'http://localhost:1234', 'ATTICUS_PROBE_KEY': 'k'}), \
-             patch.object(atticus, 'pref', side_effect=lambda k, d='': 'https://saved.example' if k == 'apiBase' else d), \
-             patch.object(atticus.urllib.request, 'urlopen', side_effect=fake):
-            self.assertEqual(atticus.models(), [])
-        self.assertTrue(seen and all(u.startswith('http://localhost:1234') and k == 'k' for u, k in seen))
 
     def test_cancelled_parent_cannot_use_leftover_commit(self):
         with patch.dict(os.environ, {'ATTICUS_COMMIT': '/fake/commit'}), \
@@ -1687,68 +1177,6 @@ print(json.dumps({{'type':'message_end','message':{{'role':'assistant','content'
                 atticus.stop_claude(p)
                 p.wait(timeout=3)
 
-    def test_devin_sigterm_stops_its_descendant(self):
-        with tempfile.TemporaryDirectory() as root:
-            root = Path(root)
-            ready, survived = root / 'ready', root / 'survived'
-            child = f'import time; from pathlib import Path; Path({str(ready)!r}).touch(); time.sleep(.6); Path({str(survived)!r}).touch()'
-            fake = root / 'devin'
-            fake.write_text(f'''#!{sys.executable}
-import json, subprocess, sys, time
-if sys.argv[1:3] == ['auth', 'status']: raise SystemExit(0)
-if sys.argv[1:3] == ['list', '--format']: print(json.dumps([])); raise SystemExit(0)
-subprocess.Popen([sys.executable, '-c', {child!r}])
-time.sleep(30)
-''')
-            fake.chmod(0o755)
-            runner = root / 'run.py'
-            runner.write_text("import atticus\natticus.pref=lambda k,d: 'devin' if k=='client' else False if k=='safe' else d\natticus.run_devin('test')\n")
-            p = subprocess.Popen([sys.executable, str(runner)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 env={**os.environ, 'PATH': str(root) + os.pathsep + os.environ['PATH'],
-                                      'ATTICUS_DIR': str(root), 'PYTHONPATH': str(Path(atticus.ME).parent)})
-            try:
-                deadline = time.monotonic() + 15
-                while not ready.exists() and time.monotonic() < deadline:
-                    time.sleep(.01)
-                self.assertTrue(ready.exists(), 'fake Devin never started')
-                p.send_signal(signal.SIGTERM)
-                p.wait(timeout=3)
-                time.sleep(.7)
-                self.assertFalse(survived.exists(), 'Devin child survived Stop')
-            finally:
-                if p.poll() is None:
-                    p.kill(); p.wait(timeout=3)
-
-    def test_pi_sigterm_stops_its_descendant(self):
-        with tempfile.TemporaryDirectory() as root:
-            root = Path(root)
-            ready, survived = root / 'ready', root / 'survived'
-            child = f'import time; from pathlib import Path; Path({str(ready)!r}).touch(); time.sleep(.6); Path({str(survived)!r}).touch()'
-            fake = root / 'pi'
-            fake.write_text(f'''#!{sys.executable}
-import subprocess, sys, time
-subprocess.Popen([sys.executable, '-c', {child!r}])
-time.sleep(30)
-''')
-            fake.chmod(0o755)
-            runner = root / 'run.py'
-            runner.write_text("import atticus\natticus.pref=lambda k,d: 'pi' if k=='client' else False if k=='safe' else d\natticus.run_pi('test')\n")
-            p = subprocess.Popen([sys.executable, str(runner)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 env={**os.environ, 'PATH': str(root) + os.pathsep + os.environ['PATH'],
-                                      'ATTICUS_DIR': str(root), 'PYTHONPATH': str(Path(atticus.ME).parent)})
-            try:
-                deadline = time.monotonic() + 15
-                while not ready.exists() and time.monotonic() < deadline:
-                    time.sleep(.01)
-                self.assertTrue(ready.exists(), 'fake Pi never started')
-                p.send_signal(signal.SIGTERM)
-                p.wait(timeout=3)
-                time.sleep(.7)
-                self.assertFalse(survived.exists(), 'Pi child survived Stop')
-            finally:
-                if p.poll() is None:
-                    p.kill(); p.wait(timeout=3)
-
     def test_fast_worker_sigterm_stops_its_action_group(self):
         with tempfile.TemporaryDirectory() as root:
             marker, ready = Path(root) / 'action', Path(root) / 'ready'
@@ -1945,7 +1373,7 @@ class WatchAndBudgetTests(unittest.TestCase):
             self.assertEqual(ask.call_args.args[0] if ask.called else None, key and {'set': key, 'value': False})
         with patch.dict(os.environ, {'ATTICUS_ASK': '/fake'}), patch.object(atticus, 'ask_user') as ask, patch.object(atticus.subprocess, 'run'), \
              patch('sys.stdout', new_callable=io.StringIO) as out:
-            atticus.set_switch('AI client', 'devin')
+            atticus.set_switch('AI client', 'local')
         ask.assert_not_called()
         self.assertIn('Only you', out.getvalue())
 

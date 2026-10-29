@@ -71,20 +71,20 @@ let agentsUI=AgentPanels()
 func after(_ s:Double,_ f:@escaping()->Void){DispatchQueue.main.asyncAfter(deadline:.now()+s,execute:f)}
 func shot(_ name:String,_ w:NSWindow?){guard let w else{print("missing window \(name)");exit(1)};w.sharingType = .readOnly;   // real panels hide from capture; only this VM fixture lifts it
 let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/sbin/screencapture");let f=w.frame.insetBy(dx:-36,dy:-36).intersection(screen.frame),r="\(Int(f.minX)),\(Int(screen.frame.maxY-f.maxY)),\(Int(f.width)),\(Int(f.height))";p.arguments=["-x","-R"+r,out+"/"+name+".png"];try! p.run();p.waitUntilExit();print("shot \(name)")}
-func hover(_ id:String){agentsUI.shelfWeb?.evaluateJavaScript("(r=>agents.pointer([r.x+r.width/2,r.y+r.height/2]))(document.querySelector('.chip[data-id=\"\(id)\"]').getBoundingClientRect())")}
+func hover(_ id:String){_=agentsUI.shelfModel.pointer(agentsUI.shelfModel.frames[id].map{[$0.midX,$0.midY]} ?? [])}
 func select(_ id:String){agentsUI.js("view","select",id)}
 let ids=rows.map{$0["id"] as! String}
 agentsUI.receive(["event":"list","agents":rows]);agentsUI.ensureShelf()
 after(2.0){agentsUI.receive(["event":"state","agent":rows[1]])}
 after(3.5){shot("shelf-needs-you",agentsUI.shelf);hover(ids[0])
- after(1.0){shot("shelf-running",agentsUI.shelf);agentsUI.shelfWeb?.evaluateJavaScript("document.querySelector('.pill').click()"){_,_ in hover(ids[2])}   // the "✓ 2 done" pill opens the finished chips
+ after(1.0){shot("shelf-running",agentsUI.shelf);agentsUI.shelfModel.setStack("open");after(0.5){hover(ids[2])}   // the "✓ 2 done" pill opens the finished chips
   after(1.0){shot("shelf-done",agentsUI.shelf);Prefs.set("agentsHidden",true);agentsUI.openView(ids[0])
    after(3.0){shot("view-running",agentsUI.view);select(ids[1])
     after(1.2){shot("view-needs-you",agentsUI.view);select(ids[2])
      after(1.2){shot("view-done",agentsUI.view);select(ids[3])
       after(1.2){shot("view-failed",agentsUI.view);agentsUI.view?.setContentSize(NSSize(width:560,height:520));select(ids[2])
         after(1.2){shot("view-done-narrow",agentsUI.view);paint.colors=[NSColor.white.cgColor,NSColor.white.cgColor]
-         agentsUI.view?.orderOut(nil);Prefs.set("agentsHidden",false);agentsUI.shelf?.orderFrontRegardless();agentsUI.shelfWeb?.evaluateJavaScript("document.querySelector('.pill')?.click()"){_,_ in hover(ids[1])}
+         agentsUI.view?.orderOut(nil);Prefs.set("agentsHidden",false);agentsUI.shelf?.orderFrontRegardless();agentsUI.shelfModel.setStack("open");after(0.5){hover(ids[1])}
          after(1.0){shot("shelf-white-backdrop",agentsUI.shelf);agentsUI.openView(ids[1])
           after(1.2){shot("view-white-backdrop",agentsUI.view);agentsUI.process?.terminate();print("design shots ok");exit(0)}}}}}}}}}}
 nsapp.run()'''
@@ -177,12 +177,11 @@ let offer=try! JSONSerialization.jsonObject(with:Data(#"OFFER"#.utf8)) as! [Stri
 agentsUI.receive(["event":"list","agents":rows+[offer]]);agentsUI.ensureShelf()
 func after(_ s:Double,_ f:@escaping()->Void){DispatchQueue.main.asyncAfter(deadline:.now()+s,execute:f)}
 func box(_ code:String,_ done:@escaping(Any?)->Void={_ in}){app.web.evaluateJavaScript(code){v,_ in done(v)}}
-func shelfJS(_ code:String,_ done:@escaping(Any?)->Void={_ in}){agentsUI.shelfWeb?.evaluateJavaScript(code){v,_ in done(v)}}
 func shoot(_ name:String,_ cocoa:NSRect){for w in [agentsUI.shelf,agentsUI.view,agentsUI.flight]{w?.sharingType = .readOnly}   // real panels hide from capture; only this VM fixture lifts it
  let f=cocoa.insetBy(dx:-30,dy:-30).intersection(screen.frame),p=Process();p.executableURL=URL(fileURLWithPath:"/usr/sbin/screencapture")
  p.arguments=["-x","-R\(Int(f.minX)),\(Int(top-f.maxY)),\(Int(f.width)),\(Int(f.height))",out+"/"+name+".png"];try! p.run();p.waitUntilExit();print("shot \(name)")}
 func both()->NSRect{app.panel.frame.union(agentsUI.shelf!.frame)}
-func chipCenter(_ id:String,_ done:@escaping(CGPoint)->Void){shelfJS("(r=>[r.x+r.width/2,r.y+22])(document.querySelector('.chip[data-id=\"\(id)\"]').getBoundingClientRect())"){v in guard let r=v as? [Double],let f=agentsUI.shelf?.frame else{print("chip \(id) not found");return};done(CGPoint(x:f.minX+r[0],y:top-(f.maxY-r[1])))}}
+func chipCenter(_ id:String,_ done:@escaping(CGPoint)->Void){guard let r=agentsUI.shelfModel.frames[id],let f=agentsUI.shelf?.frame else{print("chip \(id) not found");return};done(CGPoint(x:f.minX+r.midX,y:top-(f.maxY-r.minY-22)))}
 // The scene as a flat list of (wait, action) steps.
 var steps:[(Double,()->Void)]=[],from:[Double]=[],point=CGPoint.zero
 let winID=String(repeating:"f",count:32),offerJSON=String(data:try! JSONSerialization.data(withJSONObject:offer),encoding:.utf8)!
@@ -192,7 +191,7 @@ steps.append((1.4,{shoot("1-handoff",both());box("ui.moveSource()"){v in from=v 
 steps.append((0.3,{agentsUI.flightPace=8;agentsUI.accept(offerID,from:from);box("ui.agentStarted()")
  after(0.5){box("document.getElementById('card').getBoundingClientRect().height"){v in var f=app.panel.frame;let h=CGFloat(v as? Double ?? 330);f.origin.y=f.maxY-h;f.size.height=h;app.panel.setFrame(f,display:true)}}}))   // the app sizes its box to the page; this stub does it once   // the swim at 1/8 speed, captured as frames
 for i in 0..<7{steps.append((i==0 ? 0.25 : 0.62,{shoot("2-swim-\(i)",both().union(agentsUI.flight?.frame ?? .zero))}))}
-steps.append((1.6,{agentsUI.flightPace=1;shoot("3-after-start",both());shelfJS("document.querySelector('.pill')?.click()")}))
+steps.append((1.6,{agentsUI.flightPace=1;shoot("3-after-start",both());agentsUI.shelfModel.setStack("open")}))
 steps.append((1.0,{shoot("4-shelf-open",agentsUI.shelf!.frame);chipCenter(offerID){point=$0}}))
 steps.append((0.3,{move(point)}))
 steps.append((1.0,{shoot("5-hover-controls",agentsUI.shelf!.frame);move(away)}))
@@ -209,7 +208,7 @@ steps.append((0.8,{
 steps.append((5.5,{print("mini live \(agentsUI.mini.live) failed \(agentsUI.mini.failed) frames \(agentsUI.mini.frames) target \(agentsUI.mini.target != nil)");shoot("6-window-thumbnail",agentsUI.shelf!.frame);chipCenter(winID){point=$0}}))
 steps.append((0.3,{move(point)}))
 steps.append((2.0,{shoot("7-window-expanded",agentsUI.shelf!.frame);move(away)}))
-steps.append((0.8,{shelfJS("document.querySelector('.chip .ctl button').click()")}))
+steps.append((0.8,{let s=agentsUI.shelfModel;if let first=s.split(s.list).shown.first{s.dismiss([first.id])}}))
 steps.append((1.0,{shoot("8-minimized",agentsUI.shelf!.frame);Prefs.set("agentsHidden",true);agentsUI.openView(winID)}))
 steps.append((3.0,{shoot("9-view-window",agentsUI.view!.frame);agentsUI.process?.terminate();print("round3 shots ok");exit(0)}))
 bridge.ready={run(0)}
@@ -253,7 +252,7 @@ func fail(_ t:String)->Never{print(t);agentsUI.process?.terminate();exit(1)}
 let agentsUI=AgentPanels()
 let asks=try! JSONSerialization.jsonObject(with:Data(#"ASKS"#.utf8)) as! [[String:Any]]
 var steer=try! JSONSerialization.jsonObject(with:Data(#"STEER"#.utf8)) as! [String:Any]
-func shelfJS(_ code:String,_ done:@escaping(Any?)->Void={_ in}){agentsUI.shelfWeb?.evaluateJavaScript(code){v,e in if let e{print("js error \(e)")};done(v)}}
+func steered()->Bool{agentsUI.shelfModel.rows.first{$0.id==steer["id"] as! String}?.steered ?? false}
 func ask(_ row:[String:Any]){agentsUI.receive(["event":"state","agent":row])}
 func waiting(_ row:[String:Any])->[String:Any]{var r=row,q=row["question"] as! [String:Any];q["waiting"]=true;r["question"]=q;r["step"]="Waiting for you to turn it on";return r}
 agentsUI.receive(["event":"list","agents":[steer]]);agentsUI.ensureShelf()
@@ -262,16 +261,15 @@ func run(_ i:Int){guard i<steps.count else{return};after(steps[i].0){steps[i].1(
 steps.append((2.5,{ask(asks[0])}))
 steps.append((1.5,{shoot("1-ask-macos",agentsUI.shelf!.frame)
  // Allow on the card reaches the setup flow (the real one opens System Settings and points at the switch)
- shelfJS("[...document.querySelectorAll('.chip[data-id=\"\(asks[0]["id"]!)\"] .pk button')].map(b=>b.textContent+'|'+(b.getAttribute('aria-keyshortcuts')||'')).join(',')"){v in print("ask buttons \(v ?? "none")")}
- shelfJS("document.querySelector('.chip[data-id=\"\(asks[0]["id"]!)\"] .pk button.go').click()")}))
+ agentsUI.shelfModel.command("answer",asks[0]["id"] as! String,["answer":"y","question":(asks[0]["question"] as! [String:Any])["_a"] as Any])}))   // the card's Allow
 steps.append((0.8,{if onboarding.allowed != ["screen"]{fail("Allow did not reach setup: \(onboarding.allowed)")};print("allow reached setup");ask(waiting(asks[0]))}))
 steps.append((1.2,{shoot("2-ask-waiting",agentsUI.shelf!.frame);ask(asks[1])}))
 steps.append((1.5,{shoot("3-ask-do-it",agentsUI.shelf!.frame);ask(asks[2])}))
 steps.append((1.5,{shoot("4-ask-connector",agentsUI.shelf!.frame);for r in asks{agentsUI.receive(["event":"state","agent":r.merging(["status":"running","question":NSNull(),"step":"Working…"]){$1}])}}))
 steps.append((1.2,{steer["steer"]=["ack":"Got it: 12×24, not 24×24","at":Date().timeIntervalSince1970];agentsUI.receive(["event":"steered","agent":steer])}))
 steps.append((0.9,{shoot("5-steered-chip",agentsUI.shelf!.frame)
- shelfJS("document.querySelector('.chip[data-id=\"\(steer["id"]!)\"]').className"){v in print("steered class \(v ?? "")")}}))
-steps.append((4.0,{shelfJS("document.querySelector('.chip[data-id=\"\(steer["id"]!)\"]').className"){v in if (v as? String ?? "").contains("steered"){fail("glow did not end")};print("glow ended")}
+ print("steered \(steered())")}))
+steps.append((4.0,{if steered(){fail("glow did not end")};print("glow ended")
  Prefs.set("agentsHidden",true);agentsUI.openView(steer["id"] as! String)}))
 steps.append((3.0,{shoot("6-view-steer",agentsUI.view!.frame);ask(asks[0]);agentsUI.js("view","select",asks[0]["id"]!)}))
 steps.append((1.5,{shoot("7-view-ask",agentsUI.view!.frame);agentsUI.process?.terminate();print("round4 shots ok");exit(0)}))

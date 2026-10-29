@@ -138,7 +138,7 @@ class DictationCleanupEval(unittest.TestCase):
 
         latencies, exact, norm, safety = [], 0, 0, 0
         misses = []
-        call_patch = patch.object(atticus, "meeting_call", side_effect=fake_call) if not live else patch.object(atticus, "meeting_call", wraps=atticus.meeting_call)
+        call_patch = patch.object(atticus, "one_shot", side_effect=fake_call) if not live else patch.object(atticus, "one_shot", wraps=atticus.one_shot)
         with patch.object(atticus, "relevant_rules", return_value=""), call_patch:
             for name, source, output in FIXTURES:
                 started = time.monotonic()

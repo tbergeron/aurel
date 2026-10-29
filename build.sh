@@ -10,11 +10,17 @@ COMMIT=$(git rev-parse HEAD 2>/dev/null || echo unknown)
 [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 26 ] || { echo "Atticus needs macOS 26 or later (it uses Apple's new on-device speech)."; exit 1; }
 xcode-select -p >/dev/null 2>&1 || { echo "Needs Apple's command line tools. Run: xcode-select --install   then run ./build.sh again."; exit 1; }
 command -v python3 >/dev/null || { echo "Atticus needs Python 3. Install it, then run ./build.sh again."; exit 1; }
-command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || echo "Note: Claude Code is not installed yet. Atticus's setup window can install it, or you can pick Devin or Pi."
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
-# A compiler error must leave the installed app and its resources alone.
-swiftc -O -target "$(uname -m)-apple-macos26.0" Atticus.swift -o "$STAGE/Atticus"
+# A compiler error must leave the installed app and its resources alone. Package.swift adds Textual (native Markdown and math);
+# its first build fetches it and takes a minute or two. The scratch path is outside the source, which Nix keeps read-only.
+APPBUILD="${XDG_CACHE_HOME:-$HOME/.cache}/atticus-app"
+LOG=$(swift build -c release --scratch-path "$APPBUILD" 2>&1) || { echo "$LOG" | grep -E 'error' >&2; exit 1; }
+cp "$APPBUILD/release/Atticus" "$STAGE/Atticus"; cp -R "$APPBUILD/release/"*.bundle "$STAGE/"
+# The Parakeet speech helper (Settings → Speech model). Its first build fetches FluidAudio and takes a few minutes; later ones are quick.
+# The scratch path is outside the source, which Nix keeps read-only. Without it, Apple speech still works.
+swift build -c release --package-path parakeet --scratch-path "${XDG_CACHE_HOME:-$HOME/.cache}/atticus-parakeet" 2>&1 | grep -E 'error|Compiling atticus|Build complete' || true
+cp "${XDG_CACHE_HOME:-$HOME/.cache}/atticus-parakeet/release/atticus-parakeet" "$STAGE/" 2>/dev/null || echo "Note: the Parakeet helper didn't build, so Settings won't offer Parakeet speech."
 APP=~/Applications/Atticus.app   # in Applications so System Settings can list it for permissions
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/ui"
 cp atticus.py "$APP/Contents/Resources/"
@@ -41,6 +47,7 @@ cat > "$APP/Contents/Info.plist" <<P
 </dict></plist>
 P
 mv "$STAGE/Atticus" "$APP/Contents/MacOS/Atticus"
+rm -rf "$APP/Contents/Resources/"*.bundle; mv "$STAGE/"*.bundle "$APP/Contents/Resources/"   # Textual's code-highlighting and math fonts
 # With a code-signing identity named "Atticus Local Signing" in the keychain, macOS keeps permissions across
 # rebuilds and auto-updates; ad hoc signing would ask for every permission again after each one. So make it once.
 ID=$(security find-identity -p codesigning | awk '/Atticus Local Signing/{print $2; exit}')
@@ -53,6 +60,7 @@ if [ -z "$ID" ]; then
   rm -rf "$K"
   ID=$(security find-identity -p codesigning | awk '/Atticus Local Signing/{print $2; exit}')
 fi
+if [ -f "$STAGE/atticus-parakeet" ]; then mv "$STAGE/atticus-parakeet" "$APP/Contents/MacOS/"; codesign -s "${ID:--}" --force "$APP/Contents/MacOS/atticus-parakeet"; fi   # nested code is signed before its app
 codesign -s "${ID:--}" --force "$APP"
 # register with macOS, or System Settings can't list it for permissions
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP"

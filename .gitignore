@@ -38,3 +38,5 @@ docs/film-poster.png
 /test-artifacts/
 # Devbox generated artifacts
 .devbox/
+parakeet/.build/
+/.build/

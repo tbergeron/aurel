@@ -125,19 +125,16 @@ class TelemetryTests(unittest.TestCase):
         self.assertNotEqual(props['file'], 'atticus.py')
 
     def test_setup_problems_are_separate_from_real_worker_failures(self):
-        cases = [('HTTP 404: model llama3 may not exist', True, 'server_rejected'),
-                 ('400: model does not support tools', True, 'server_rejected'),
-                 ('422: incompatible request', True, 'server_rejected'),
-                 ('OAuth session expired', False, 'signed_out'),
-                 ('HTTP 429', False, 'rate_limited'), ('Rate limit reached for requests', False, 'rate_limited'),
-                 ('You’ve hit your weekly limit · resets 3pm', False, 'plan_limit'), ('Context window limit reached', False, 'too_long'),
-                 ('network connection failed', False, 'offline')]
+        cases = [('OAuth session expired', 'signed_out'),
+                 ('HTTP 429', 'rate_limited'), ('Rate limit reached for requests', 'rate_limited'),
+                 ('You’ve hit your weekly limit · resets 3pm', 'plan_limit'), ('Context window limit reached', 'too_long'),
+                 ('network connection failed', 'offline')]
         with patch.object(atticus, 'report_error') as sent:
-            for detail, custom, why in cases:
-                self.assertEqual(atticus.failure_why(detail, custom), why)
+            for detail, why in cases:
+                self.assertEqual(atticus.failure_why(detail), why)
                 atticus.report_worker_failure('claude', 'private-model-name', why)
             for why in ('setup_needed', 'provider_needed', 'model_missing'):
-                atticus.report_worker_failure('pi', 'haiku', why)
+                atticus.report_worker_failure('local', 'haiku', why)
         self.assertTrue(all(call.args == ('setup',) for call in sent.call_args_list))
         self.assertNotIn('private', str(sent.call_args_list))
         with patch.object(atticus, 'report_error') as sent:

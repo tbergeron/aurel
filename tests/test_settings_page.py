@@ -91,36 +91,28 @@ class SettingsPageTests(unittest.TestCase):
         self.assertTrue(all(re.search(r'<i class="info" title="[^"]+">i</i></span>', m) for m in re.findall(r'<span>[^<]*<i class="info".*?</span>', page)))
         self.assertIn('Risky actions need approval. Background agents use a scratch folder.', page)
 
-    def test_whisper_rows_follow_the_speech_model_and_report_status(self):
+    def test_parakeet_rows_follow_the_speech_model_and_report_status(self):
         out = self.page("""const rows=()=>[...document.querySelectorAll('[data-w]')].map(r=>!r.hidden);
-            const W=(over,models)=>({server:true,model:'turbo',running:false,error:null,models:models||[{id:'turbo',name:'Turbo',size:'574 MB',have:false,progress:null},
-              {id:'large',name:'Large v3',size:'1.1 GB',have:true,progress:null},{id:'small',name:'Small',size:'190 MB',have:false,progress:.42}],...over});
-            const shown=()=>[$('wtext').textContent,['winstall','wdownload','wcancel','wdelete'].filter(b=>!$(b).hidden).join()];
-            st.whisper(W({server:false}));
+            const W=(over,models)=>({server:true,model:'v3',running:false,error:null,models:models||[{id:'v3',name:'Multilingual',size:'469 MB',have:false,progress:null},
+              {id:'v2',name:'English',size:'451 MB',have:true,progress:null}],...over});
+            const shown=()=>[$('wtext').textContent,['wdownload','wcancel','wdelete'].filter(b=>!$(b).hidden).join()];
+            const model=v=>{const s=document.querySelector('[data-k=parakeetModel]'); s.value=v; s.onchange({target:s});};
+            st.parakeet(W({server:false}));
             const early=rows(); set('speechModel','dictation'); const dictation=rows();
-            document.querySelector('[data-k=speechModel] [data-v=whisper]').click(); const whisper=rows();
+            document.querySelector('[data-k=speechModel] [data-v=parakeet]').click(); const parakeet=rows();
             const states=[shown()];
-            st.whisper(W({server:true})); states.push(shown(), [$('wdownload').textContent]);
+            st.parakeet(W({server:true})); states.push(shown(), [$('wdownload').textContent]);
             $('wdownload').click();
-            document.querySelector('[data-k=whisperModel]').value='small'; document.querySelector('[data-k=whisperModel]').onchange(); states.push(shown()); $('wcancel').click();
-            document.querySelector('[data-k=whisperModel]').value='large'; document.querySelector('[data-k=whisperModel]').onchange(); states.push(shown()); $('wdelete').click();
-            document.querySelector('[data-k=whisperModel]').value='turbo'; document.querySelector('[data-k=whisperModel]').onchange();
-            st.whisper(W({error:'Download failed. Check your connection and try again.'})); states.push(shown()); $('wdownload').click();
-            const lang=document.querySelector('[data-k=whisperLanguage]'); lang.value='id'; lang.onchange();
-            return [early,dictation,whisper,states,P.whisperLanguage,lang.value];""")
-        self.assertEqual(out['result'], [[False] * 3, [False] * 3, [True] * 3,
-            [['Needs whisper.cpp.', 'winstall'], ['Model not downloaded.', 'wdownload'], ['Download 574 MB'], ['Downloading 42%…', 'wcancel'],
-             ['Ready. Runs on this Mac.', 'wdelete'], ['Download failed. Check your connection and try again.', 'wdownload']], 'id', 'id'])
-        for m in [{'do': 'set', 'k': 'speechModel', 'v': 'whisper'}, {'do': 'set', 'k': 'whisperModel', 'v': 'small'}, {'do': 'set', 'k': 'whisperLanguage', 'v': 'id'},
-                  {'do': 'whisperDownload', 'id': 'turbo'}, {'do': 'whisperCancel', 'id': 'small'}, {'do': 'whisperDelete', 'id': 'large'}]:
+            st.parakeet(W({}, [{id:'v3',name:'Multilingual',size:'469 MB',have:false,progress:.42}])); states.push(shown()); $('wcancel').click();
+            model('v2'); st.parakeet(W({})); states.push(shown()); $('wdelete').click();
+            model('v3'); st.parakeet(W({error:'Download failed. Check your connection and try again.'})); states.push(shown()); $('wdownload').click();
+            return [early,dictation,parakeet,states];""")
+        self.assertEqual(out['result'], [[False] * 2, [False] * 2, [True] * 2,
+            [['The Parakeet helper is missing. Run ./build.sh again.', ''], ['Model not downloaded.', 'wdownload'], ['Download 469 MB'], ['Downloading 42%…', 'wcancel'],
+             ['Ready. Runs on this Mac.', 'wdelete'], ['Download failed. Check your connection and try again.', 'wdownload']]])
+        for m in [{'do': 'set', 'k': 'speechModel', 'v': 'parakeet'}, {'do': 'set', 'k': 'parakeetModel', 'v': 'v2'},
+                  {'do': 'parakeetDownload', 'id': 'v3'}, {'do': 'parakeetCancel', 'id': 'v3'}, {'do': 'parakeetDelete', 'id': 'v2'}]:
             self.assertIn(m, out['posts'])
-
-    def test_whisper_install_button_posts_install(self):
-        out = self.page("""set('speechModel','whisper'); st.whisper({server:false,models:[]}); $('winstall').click();
-            const sel=document.querySelector('[data-k=whisperModel]'); sel.focus(); st.whisper({server:true,models:[]}); st.whisper({server:true,models:[]});
-            return [document.activeElement===sel,$('wtext').textContent];""")
-        self.assertEqual(out['result'], [True, 'Model not downloaded.'])
-        self.assertIn({'do': 'whisperInstall'}, out['posts'])
 
     def test_notice_shows_and_its_action_runs_once(self):
         out = self.page('''st.notice({text: 'Couldn’t save that change, so the old setting is back.'});
@@ -151,15 +143,6 @@ class SettingsPageTests(unittest.TestCase):
             return [shown,row.hidden];""")
         self.assertEqual(out['result'], [[True, True, 'Hold to talk. Double-tap to lock.'], True])
         self.assertIn({'do': 'globeKey'}, out['posts'])
-
-    def test_cleanup_is_disabled_with_a_reason_for_pi_and_devin(self):
-        out = self.page("""const state=client=>{st.load({prefs:{client,hotkeyLabel:'⌃⌥Space',dictateHotkeyLabel:'⌃⌥D',dictateMode:'cleanup'}});
-            const clean=document.querySelector('[data-k=dictateMode] [data-v=cleanup]');
-            return [clean.disabled,$('dictatemodehint').textContent];};
-            return [state('pi'),state('devin'),state('claude')];""")
-        self.assertEqual(out['result'], [[True, 'Clean up needs Claude.'],
-                                         [True, 'Clean up needs Claude.'],
-                                         [False, 'Clean up drops fillers, fixes misheard words.']])
 
     def test_dictation_clash_warns_in_its_row_then_settles(self):
         out = self.page("""st.load({prefs:{hotkeyLabel:'⌃⌥Space',dictateHotkeyLabel:'⌃⌥D'},dictateHotkeyTaken:true});
@@ -198,7 +181,7 @@ class SettingsPageTests(unittest.TestCase):
                 self.assertNotIn(f'data-k="{key}"', page)
                 self.assertNotIn(key, atticus.switches())
                 self.assertNotIn(key, atticus.picks())
-        self.assertEqual(len(page.split('<nav>')[1].split('</nav>')[0].split('data-s=')) - 1, 9)   # 8 pages and Report feedback
+        self.assertEqual(len(page.split('<nav>')[1].split('</nav>')[0].split('data-s=')) - 1, 6)   # 6 pages
 
     def test_pages_wear_their_sidebar_color_and_row_actions_show_on_focus(self):
         out = self.page("""document.body.classList.add('reduce');
@@ -254,7 +237,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn({'do': 'models'}, out['posts'])
 
     def test_running_local_server_can_fill_address_and_model(self):
-        out = self.page("""P.client='pi'; st.local([{name:'Ollama',base:'http://localhost:11434',models:['qwen3']}]);
+        out = self.page("""P.client='local'; st.local([{name:'Ollama',base:'http://localhost:11434',models:['qwen3']}]);
             const offered=!$('localserver').hidden&&$('uselocal').textContent==='Use Ollama';
             $('uselocal').click(); return [offered,P.client,P.apiBase,P.apiModel,$('localserver').hidden];""")
         self.assertEqual(out['result'], [True, 'claude', 'http://localhost:11434', 'qwen3', True])
@@ -262,15 +245,15 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn({'do': 'set', 'k': 'apiBase', 'v': 'http://localhost:11434'}, out['posts'])
         self.assertIn({'do': 'set', 'k': 'apiModel', 'v': 'qwen3'}, out['posts'])
 
-    def test_pi_client_explains_its_provider_and_hides_claude_models(self):
-        out = self.page("""st.load({prefs:{client:'pi',hotkeyLabel:'⌃⌥Space'}});
+    def test_local_client_explains_itself_and_hides_claude_models(self):
+        out = self.page("""st.load({prefs:{client:'local',hotkeyLabel:'⌃⌥Space'}});
             const model=document.querySelector('[data-k=model]').closest('.row');
             return [$('brainlede').textContent,$('clientwhy').textContent,model.hidden,$('planname').textContent,$('safenote').textContent,$('agentsettings').hidden];""")
         lede, why, hidden, plan, safety, agents_hidden = out['result']
-        self.assertIn('selected in Pi', lede)
-        self.assertIn('local models', why)
+        self.assertIn('runs on this Mac', lede)
+        self.assertIn('offline', why)
         self.assertTrue(hidden)
-        self.assertEqual(plan, 'Pi')
+        self.assertEqual(plan, 'Local model')
         self.assertIn('approval', safety)
         self.assertTrue(agents_hidden)
 

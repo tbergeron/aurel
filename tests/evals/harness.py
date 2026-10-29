@@ -28,7 +28,7 @@ def _import_atticus(repo):
         if mod == 'atticus' or mod.startswith('atticus.'):
             del sys.modules[mod]
     import atticus  # noqa: F401
-
+    atticus.CLIENT_DEFAULT = 'claude'   # the dry runs script Claude's replies
     return sys.modules['atticus']
 
 

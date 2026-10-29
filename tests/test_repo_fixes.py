@@ -71,21 +71,16 @@ class RepoFixTests(unittest.TestCase):
 
     def test_settings_shots_cover_current_pages_only(self):
         from tests.shoot_settings import PREFS, SCENES
-        pages = {'dictation', 'general', 'intelligence', 'memory', 'meetings', 'usage', 'account', 'about', 'apps', 'feedback'}
+        pages = {'dictation', 'general', 'intelligence', 'memory', 'account', 'about', 'apps'}
         names = [name.split('-')[1] for name, _ in SCENES]
         self.assertTrue(set(names) <= pages, set(names) - pages)   # no removed page
-        self.assertTrue(pages - {'apps', 'feedback'} <= set(names))   # every current page is shot
+        self.assertTrue(pages - {'apps'} <= set(names))   # every current page is shot
         self.assertFalse(set(PREFS) & {'longAsks', 'quietAudio', 'workIn', 'ahead', 'draftInsert'})
 
     def test_calendar_example_is_not_duplicated(self):
         readme = (ROOT / 'README.md').read_text()
         self.assertEqual(readme.count('Move my dentist appointment to 4.'), 1)
         self.assertIn('Adding is immediate; moving or deleting asks first.', readme)
-
-    def test_meeting_bridge_has_one_worker_fixture(self):
-        source = (ROOT / 'tests/test_meeting_bridge.py').read_text()
-        self.assertEqual(source.count("(root / 'worker.py').write_text("), 1)
-
 
 if __name__ == '__main__':
     unittest.main()

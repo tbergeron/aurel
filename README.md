@@ -5,7 +5,6 @@
   Atticus moves your windows, finds your files, reads your screen and gets it done.
 </p>
 
-<p align="center"><a href="https://ko-fi.com/saarthr"><b>☕ Leave a tip</b></a> · Atticus is free; tips keep it going.</p>
 
 <p align="center">
   <b>🧠 Learns as you use it</b> &nbsp;·&nbsp; <b>⚡ Fast</b> &nbsp;·&nbsp; <b>🔑 No API key</b> &nbsp;·&nbsp; <b>Free and open source</b>
@@ -17,7 +16,7 @@
 curl -fsSL https://raw.githubusercontent.com/SaarthurR/atticus-mac/main/install.sh | bash
 ```
 
-Needs macOS 26 and an AI client: Claude Code on a Claude plan, Devin, Pi or a local model. [Full install steps](#install)
+Needs macOS 26. Atticus runs a free AI model on your Mac and downloads it for you; Claude Code is optional. [Full install steps](#install)
 
 ## What it does
 
@@ -28,9 +27,8 @@ Needs macOS 26 and an AI client: Claude Code on a Claude plan, Devin, Pi or a lo
 - **Dictate anywhere.** Hold fn, talk, let go. Your words land in any text field, cleaned up.
 - **Hands-free.** Turn on Settings → General → Wake word, then just say "Atticus". Keep talking after each answer; the box stays up while you work and only ✕ closes it.
 - **Background agents.** Big jobs run behind your apps while you keep working.
-- **Meeting Copilot.** Answers and notes during calls, saved on your Mac.
 - **Remembers you.** Say "remember…" and every ask after that knows it.
-- **Your plan, no API key.** Runs on Claude, Devin, Pi or a local model.
+- **Runs on your Mac.** A local model by default: free, private, offline. Claude if you want it.
 - **Private and safe.** Your voice stays on your Mac. Deletes, sends and purchases ask first.
 
 > **On Windows?** [@FindlayHi](https://github.com/FindlayHi) built **[Atticus for Windows](https://github.com/FindlayHi/atticus-windows)**, with integrations for Home Assistant, Jellyfin, Immich and more.
@@ -40,7 +38,6 @@ Needs macOS 26 and an AI client: Claude Code on a Claude plan, Devin, Pi or a lo
   <img alt="Swift" src="https://img.shields.io/badge/Swift-1d1d1f?style=for-the-badge&logo=swift&logoColor=white">
   <img alt="Claude" src="https://img.shields.io/badge/Claude_Haiku-1d1d1f?style=for-the-badge&logo=anthropic&logoColor=white">
   <img alt="Cost" src="https://img.shields.io/badge/~0.18%C2%A2_per_ask-1d1d1f?style=for-the-badge">
-  <a href="https://ko-fi.com/saarthr"><img alt="Support on Ko-fi" src="https://img.shields.io/badge/Support_on_Ko--fi-1d1d1f?style=for-the-badge&logo=kofi&logoColor=white"></a>
 </p>
 
 <br>
@@ -96,7 +93,13 @@ When Atticus acts but can't see the result, it says so ("…but I couldn't confi
 
 Hold fn to talk. Double-tap to lock. In any text field, hold the fn (🌐) key, speak, then let go. Double-tap it to lock dictation on for hands-free talking; an orange ring circles the pill, and one more press inserts. fn is the shortcut until you record another in Settings → Dictation (a key combo, an F-key, or a modifier chord like fn+Control); a shortcut you already set stays. If macOS's "Press 🌐 key to" setting opens emoji, switches input source or starts Apple dictation, Settings and setup show "Set Press 🌐 key to Do Nothing" with a button to Keyboard settings. fn with another key (fn+Delete, fn+←) stays that key's shortcut. While you talk, a small pill shows a sound wave. The Dictation tab shows your words today and all time, time saved, sessions, your dictionary and history. **Verbatim** types Apple's on-device transcript with no AI. **Clean up** makes one quick AI pass that keeps your words, fixes words it clearly misheard ("talk it and it' type" becomes "talk to it and it'll type"), and drops the slips: "um" and "you know" go, "scratch that" removes the thought before it, "four, actually five" leaves five, a spoken list becomes a list, and "new line" or "question mark" become formatting. It types what you dictate and never answers or acts on it. To spell names and terms it uses your Dictionary and the text just before your cursor. It starts while you talk, so the text lands soon after you let go; if the AI's version adds or drops too much, Atticus types your words with only the obvious fillers removed. Highlight text first and Clean up tidies that text in place. Esc cancels. When the words land, the pill turns into a green check and fades. With no text field selected, it says "Nothing selected to insert — saved to History." Dictation never leaves your words on the clipboard: if a field only takes a paste, Atticus borrows the clipboard for that one paste and puts back what you had copied. If the field changes or Atticus can't confirm the words landed, it saves them to Dictation History and says "Saved to History" instead of typing twice; with History off, the words stay in the pill.
 
-**Other languages.** Atticus runs Apple's speech in English (US). For other languages, speech that mixes languages, or more accurate English, pick **Whisper** in Settings → General → Speech model. It runs [whisper.cpp](https://github.com/ggml-org/whisper.cpp) on your Mac, so audio still never leaves it. Settings installs whisper.cpp with Homebrew (`brew install whisper.cpp`) and downloads the model you choose: **Turbo** (574 MB, the default), **Large v3** (1.1 GB, the most accurate) or **Small** (190 MB). Language is detected automatically, or you can pick one. Words show up while you talk, a little behind Apple's. Downloaded models live in `~/.config/atticus/whisper/`. Meeting Copilot still uses Apple's English model.
+**Faster speech and other languages.** Atticus runs Apple's speech in English (US). For faster, more accurate dictation, or for other languages, pick **Parakeet** in Settings → Dictation → Speech model. It runs NVIDIA's Parakeet on your Mac ([FluidAudio](https://github.com/FluidInference/FluidAudio)), so audio never leaves your Mac. A short sentence turns into text in about a tenth of a second, even on an M1, and a voice detector skips silence and noise so they never turn into words. Four models, each pinned to an exact, checksum-verified download: **Multilingual** (469 MB, the default), **Most accurate** (613 MB, just as fast) and **Light** (213 MB, on the graphics chip, so slower on older Macs), all with 25 European languages detected automatically, and **English** (451 MB). Models live in `~/Library/Application Support/FluidAudio/Models/`. The wake word still uses Apple's English model.
+
+**Words that fit.** Dictated words fit where they land: a space before them unless one is there, lowercase in the middle of a sentence, a capital after a period or a new line, and no period when the sentence goes on after the cursor. "I", acronyms, names like iPhone and your Dictionary words keep their case. Apps that hide their text get the words as heard.
+
+**Type as I talk.** Turn it on in Settings → Dictation (Verbatim only) and your words go in at each pause while you keep talking. Words already typed are never changed; letting go types the rest.
+
+**Free memory after** (Settings → General) unloads the speech and AI models when idle: 1, 5 (the default) or 15 minutes, an hour, or never. They load again the next time you talk. To time the speech models on your Mac: `tests/evals/speech_bench.sh <audio file>`.
 
 ## Point at your screen
 
@@ -112,32 +115,23 @@ The drawing stays while you keep asking about it, and Atticus can add to it; it 
 
 ## Model choice
 
-In Settings → Intelligence, choose **Cheapest**, **Balanced** (the default) or **Most capable**. Cheapest keeps every ask, meeting question and new agent on Haiku. Balanced keeps questions and quick commands on Haiku and gives real work to your work model; if a task turns multi-step, fails, or ends without a confirmed result, it continues once on the work model. Most capable uses the work model for every AI ask and agent. Instant commands skip the AI in every mode. **Work model** picks Sonnet or Opus; Opus is stronger and uses more of your plan.
+In Settings → Intelligence, choose **Cheapest**, **Balanced** (the default) or **Most capable**. Cheapest keeps every ask and new agent on Haiku. Balanced keeps questions and quick commands on Haiku and gives real work to your work model; if a task turns multi-step, fails, or ends without a confirmed result, it continues once on the work model. Most capable uses the work model for every AI ask and agent. Instant commands skip the AI in every mode. **Work model** picks Sonnet or Opus; Opus is stronger and uses more of your plan.
 
-With a custom server connected, Atticus uses that server's model. Under **Custom server**, choose an **Agent model** from its model list, or leave it empty to use the main model. Running agents keep their current model.
 
-## Use a local model
+## The local model
 
-Atticus can send Claude Code to a local server that implements the Anthropic Messages API. Claude Code must be installed, but you do not need a Claude account.
+Atticus thinks with a model that runs on your Mac, chosen in Settings → Intelligence → **Local** (the default). Click **Download** once and Atticus fetches [llama.cpp](https://github.com/ggml-org/llama.cpp) and the model, checks both against pinned checksums, and runs them itself. You install nothing, and your asks never leave your Mac. Files live in `~/.config/atticus/llm/`; the model loads when you talk and unloads after 10 idle minutes.
 
-1. Start a server and load a model:
+- **Gemma 4 E4B** (5.2 GB, the default) fits 16 GB Macs.
+- **Qwen 3.6 35B** (22.1 GB) is much stronger at long tasks and needs 32 GB of memory.
 
-   | Server | Version with `/v1/messages` | Default address |
-   |---|---:|---|
-   | Ollama | 0.14.0+ | `http://localhost:11434` |
-   | LM Studio | 0.4.1+ | `http://localhost:1234` |
-   | llama.cpp `llama-server` | builds after Nov 28, 2025 | `http://localhost:8080` |
-   | vLLM | 0.11.1+ | `http://localhost:8000` |
+Commands the instant patterns don't catch go to the model once: it picks one action ("go down a little" → scroll down a bit, "click the second result" → that link) and Atticus does it, in about a second on an M1. Anything bigger runs step by step with the same helpers and safety check Claude uses. `python3 tests/evals/local_router_bench.py <server>` scores a model on 42 spoken commands; on an M1, Gemma 4 E4B got 38 right with a median of 1.3 s.
 
-   Ollama starts with `ollama serve`; LM Studio uses `lms server start --port 1234`; llama.cpp uses `llama-server -m /path/to/model.gguf`; vLLM uses `vllm serve <model>`.
-2. Open setup → **Change provider** → **Custom server**, or Settings → Intelligence → **Custom server**. If a server is on a default port, Atticus offers **Use Ollama**, **Use LM Studio**, **Use llama.cpp**, or **Use vLLM**.
-3. Leave Key empty for an unauthenticated local server. Pick a model from the list Atticus reads from `GET /v1/models`, then ask normally.
-
-Small local models are usually weaker at reliable tool use and following long screen context. Screen reading also needs a vision-capable model; text-only models can still use accessible window and page text.
+Clean up dictation uses the local model too. Background agents and routines still need Claude Code. To send only bigger asks to Claude, set **Bigger asks** to Claude.
 
 ## Agents
 
-Ask for something big ("find me USB-C hubs") and Atticus hands it to a background agent. A chip shows up in the corner while you keep working. The box, the dictation pill, the chips and the done card show up on the display your mouse is on. Hover it to see the live steps and a mini screen of the work. To change course, just talk: "tell the hub agent to check HDMI too" steers the running agent instead of starting a new one. When it finishes, a card shows the result once you stop typing. During a meeting or screen share, you get a quiet notification instead. If an agent needs a permission or a connector, it asks on its chip, then carries on. Turn on agents and their connectors in Settings → Agents (or the setup step).
+Ask for something big ("find me USB-C hubs") and Atticus hands it to a background agent. A chip shows up in the corner while you keep working. The box, the dictation pill, the chips and the done card show up on the display your mouse is on. Hover it to see the live steps and a mini screen of the work. To change course, just talk: "tell the hub agent to check HDMI too" steers the running agent instead of starting a new one. When it finishes, a card shows the result once you stop typing. During a call or screen share, you get a quiet notification instead. If an agent needs a permission or a connector, it asks on its chip, then carries on. Turn on agents and their connectors in Settings → Agents (or the setup step).
 
 A long ask in the box moves to an agent by itself, with no card, and agents Atticus offers start right away. To move one sooner, press ⌃⌥↩ from any app while it runs.
 
@@ -147,33 +141,18 @@ Agents work behind you. Their clicks, typing, scrolling and keys go straight to 
 
 Say “make an agent called Researcher that finds sources and writes a short brief” to save reusable instructions, then “ask Researcher to…” to start it. Saved agents can include a folder or files and can be listed, renamed, or deleted by voice or in the Agents view.
 
-Background agents currently require Claude Code. Pi and Devin handle foreground asks; their meeting transcripts and recaps stay local. Pi has no built-in sandbox, so Atticus disables its direct file-edit and MCP tools and Safe mode asks before every shell command; its read tools still have your account’s file access.
+Background agents currently require Claude Code. With the local model, asks run in the box instead.
 
 ### Chats
 
 Plain questions and answers can be saved in the Agents window: switch to **Chats** at the top. Chats keep only answers, never actions or agent tasks, stay on your Mac, can be renamed, and are never sent back to the AI. Turn saving off in Settings → Memory → Learning → Save chats.
 
-## Meeting Copilot
-
-Enable Meeting Copilot in Settings → Meetings → Meeting Copilot settings, then open it for a call or try the demo. Drag its header or empty background in any state; the minimized pill also drags. Positions and expanded sizes are remembered per display. Double-click the header to return to the default spot. Frames stay inside the display’s usable area, including after a display change.
-
-**Save meeting transcripts** is on by default. While listening, a quiet indicator shows when saving is active. Text, speaker labels, timestamps, notes and copilot answers save incrementally under `$ATTICUS_DIR/meetings/<meeting-id>/` (normally `~/.config/atticus/meetings/`). Each folder is private (`0700`), with `metadata.json` and an append-only `events.jsonl` (`0600`). Unfinished speech is checkpointed every two seconds; interrupted calls remain readable. Audio is never saved.
-
-Settings → **Meetings**, or **See all meetings** after a call, opens the local archive. Search titles and transcripts, use ↑/↓ and Return to browse, ⌘F to search and Esc to go back. Each meeting shows its recap, action items, notes, answers and timestamped transcript. Copy, export Markdown, or delete with confirmation. Turning saving off stops the current archive and asks whether to keep or delete past meetings.
-
-With **AI meeting summaries** on (the default), Claude reads the transcript once after each ended session and writes a summary and action items, on your own Claude plan. Turn it off to keep transcripts entirely on your Mac; you still get a simpler local recap that quotes decisions and opening/closing speech. A failed AI recap leaves the local transcript intact. Resuming cancels a pending recap and the next End summarizes the full transcript. Closing or pausing stops recap work; already saved text stays on your Mac. Asking Atticus about a past meeting lets it search that archive with `--meeting-history "<keywords, weekday or YYYY-MM-DD>"`. Live question answering retains the selected Meeting Copilot answer policy.
-
-## Feedback
-
-Choose **Report Feedback…** in the menu bar, **Report feedback** in Settings, or say/type “report feedback” or “report a bug”. Review the exact text before opening a GitHub issue draft. It contains a short template, version/commit, macOS and Mac model, model, safe mode and input settings. **Include my last ask** starts off; answers, screen content and command logs are never attached. Submit the draft yourself on GitHub.
-
 ## Install
 
 You need:
 - **macOS 26** or later (Atticus uses Apple's new on-device speech)
-- **An AI client:** a paid Claude plan (Pro or Max) and [Claude Code](https://claude.com/claude-code), the [Devin CLI](https://docs.devin.ai/cli) signed in to a Devin plan, [Pi](https://pi.dev) with your chosen provider/model, or a custom server through Claude Code with no Claude account. Pick one in setup (“Change provider”) or Settings → Intelligence.
+- **Optional, instead of the local model:** a paid Claude plan (Pro or Max) and [Claude Code](https://claude.com/claude-code). Pick one in setup (“Change provider”) or Settings → Intelligence.
 - Apple's command line tools: `xcode-select --install`
-- Optional, for languages other than English: [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (`brew install whisper.cpp`, or `whisper-cpp` from nixpkgs). Settings → General can install it for you.
 - Accessibility permission enables native clicks, scrolling, menus, keys, dragging and field typing.
 
 Paste this in Terminal:
@@ -197,7 +176,7 @@ The flake installs its packaged Atticus version, so macOS 26+ and Apple's comman
 Working on the code instead? Clone the repo anywhere and run `./build.sh` after each change. A Devbox environment is included for Python regression tests; run `devbox shell`, then `devbox run test`.
 
 The first launch opens a setup window. It checks your AI plan, then asks for each macOS permission.
-After that, Atticus lives in the menu bar. Open it from Spotlight (⌘Space, "Atticus") for Settings: shortcut, voice, model, privacy, memory and usage. Settings and setup follow your Mac's light or dark appearance.
+After that, Atticus lives in the menu bar. Open it from Spotlight (⌘Space, "Atticus") for Settings: shortcut, voice, model, privacy, memory and history. Settings and setup follow your Mac's light or dark appearance.
 If you sign out of your AI client later, the setup window comes back by itself.
 To see it again: `defaults delete com.atticus.app onboarded`, then restart the app.
 
@@ -224,13 +203,14 @@ Atticus has to stay fast and nearly free, so new features must fit under these l
 
 ## Anonymous usage
 
-Atticus sends a random ID (made on your Mac, not tied to you) with daily use, ask outcomes, feature names, timings, dictation outcomes, and code locations for errors. It never sends task text, dictated words, file contents, paths, or screen content. Turn it off in Settings → Account & Access → Count me as a user.
+Atticus sends a random ID (made on your Mac, not tied to you) with daily use, ask outcomes, feature names, timings, dictation outcomes, and code locations for errors. It never sends task text, dictated words, file contents, paths, or screen content. Turn it off in Settings → Privacy & Safety → Count me as a user.
 
-If you say yes to **Help improve Atticus** (asked once, off until you do), a task that fails sends what you asked, the steps Atticus took and why it failed, under the same random ID. Emails, numbers, file paths, link details and anything typed for you are removed on your Mac first. Turn it off in Settings → Account & Access → Help improve Atticus.
+If you say yes to **Help improve Atticus** (asked once, off until you do), a task that fails sends what you asked, the steps Atticus took and why it failed, under the same random ID. Emails, numbers, file paths, link details and anything typed for you are removed on your Mac first. Turn it off in Settings → Privacy & Safety → Help improve Atticus.
 
 ## Files
 
 - `Atticus.swift`: the app (hotkey, speech, overlay, onboarding window)
+- `parakeet/`: the Parakeet speech helper (Swift package on FluidAudio) that `build.sh` puts next to the app
 - `atticus.py`: the brain (fast commands, system prompt, helpers for windows, web and screen)
 - `ui/ui.html`, `ui/onboarding.html`, `ui/settings.html`: the overlay, the welcome flow, and Settings
 - `ui/AppIcon.icns`: the app icon

@@ -128,7 +128,7 @@ class AgentTests(unittest.TestCase):
         marker='[agent '+json.dumps({'title':'Fill the document','brief':'Complete the requested fields','context':'Known URL','connectors':['mcp__fixture__inspect','bad name'],'resume':'abc','destination':'meeting'})+']'
         row=atticus.parse_handoff(marker)
         self.assertEqual(row['title'],'Fill the document');self.assertEqual(row['connectors'],['mcp__fixture__inspect'])
-        self.assertEqual(row['destination'],'meeting')
+        self.assertNotIn('destination',row)   # meeting prep was removed; the field is ignored
         pretty='[agent '+json.dumps({'title':'Fill the document','brief':'Complete the requested fields'},indent=2)+']'
         for good in (marker+'\nMore words',marker+' I handed it off.','  \n'+pretty,'```json\n'+marker+'\n```',marker+'\n'+marker):
             self.assertEqual(atticus.parse_handoff(good)['title'],row['title'],good)
@@ -394,7 +394,7 @@ class AgentTests(unittest.TestCase):
                 self.assertNotIn(atticus.MODEL_OFFER.strip(),json.dumps(atticus.run.handoff))
                 for k in prefs:self.prefs.pop(k)
                 atticus.MainMove.carried.clear()
-        for name in ('devin','pi'):
+        for name in ('local',):
             self.prefs['client']=name
             with patch.object(atticus,'run_'+name,side_effect=lambda *a,**kw:print('fixture reply') or ('done',0,[])),patch.dict(os.environ,{'ATTICUS_UI':'1'}), \
                  contextlib.redirect_stdout(io.StringIO()) as output:
@@ -724,37 +724,21 @@ class AgentTests(unittest.TestCase):
         self.assertIn('Write,Edit',args[args.index('--tools')+1]);self.assertIn('mcp__fixture__inspect',args[args.index('--tools')+1])
         self.assertEqual(args[args.index('--permission-mode')+1],'dontAsk')
 
-    def test_agent_model_uses_its_own_router_model_and_explicit_credentials(self):
+    def test_agent_model_follows_the_routing_mode(self):
         for mode, model in (('cheapest','haiku'), ('balanced','sonnet'), ('capable','opus')):
             self.prefs.update(routing=mode, model='opus' if mode == 'capable' else 'haiku')
             self.assertEqual(atticus.agent_model(),model)
-        self.prefs.update(apiBase='https://fixture.invalid/anthropic',apiModel='main-model',apiKey='fixture-key')
-        self.assertEqual(atticus.agent_model(),'main-model')
-        self.prefs['agentApiModel']='agent-model'
-        row=self.manager.new()
-        with patch.object(atticus.shutil,'which',return_value='/fixture/claude'),patch.object(atticus.subprocess,'Popen') as launch, \
-             patch.object(atticus.atexit,'register'),patch.dict(os.environ,{'ANTHROPIC_AUTH_TOKEN':'inherited-fixture'}):
-            process=atticus.start_claude(atticus.agent_model(),row);process.errors.close()
-            args=launch.call_args.args[0];env=launch.call_args.kwargs['env']
-            self.assertEqual(args[args.index('--model')+1],'agent-model')
-            self.assertEqual(env['ANTHROPIC_AUTH_TOKEN'],'fixture-key')
-            self.assertEqual(env['ANTHROPIC_BASE_URL'],self.prefs['apiBase'])
-            self.assertEqual({env[f'ANTHROPIC_DEFAULT_{m}_MODEL'] for m in ('HAIKU','SONNET','OPUS')},{'agent-model'})
-            process=atticus.start_claude();process.errors.close()
-            self.assertEqual(launch.call_args.kwargs['env']['ANTHROPIC_DEFAULT_HAIKU_MODEL'],'main-model')
-        self.prefs.pop('apiBase')
-        self.assertEqual(atticus.agent_model(),'opus')
 
-    def test_changing_router_agent_model_replaces_only_the_idle_worker(self):
-        self.prefs.update(apiBase='https://fixture.invalid',apiModel='main-model',agentApiModel='first-model')
+    def test_changing_the_agent_model_replaces_only_the_idle_worker(self):
+        self.prefs.update(routing='balanced',model='haiku')   # agents on Sonnet
         running=self.prepare();self.manager.start(running['id']);idle=self.manager.idle
         self.until(lambda:idle['id'] in self.manager.processes)
         old=self.manager.processes[idle['id']]
-        self.prefs['agentApiModel']='next-model'
+        self.prefs['routing']='cheapest'   # agents on Haiku now
         offered=self.prepare('WAIT another task')
         self.assertIsNotNone(old.poll())
-        self.assertEqual(offered['_model'],'next-model')
-        self.assertEqual(running['_model'],'first-model')
+        self.assertEqual(offered['_model'],'haiku')
+        self.assertEqual(running['_model'],'sonnet')
         self.assertIsNone(self.manager.processes[running['id']].poll())
 
     def test_warm_offer_sends_no_user_message_and_not_now_kills_group(self):
@@ -929,11 +913,6 @@ class AgentTests(unittest.TestCase):
         decision,ask=self.gate('mcp__fixture__missing',directory=row['directory']);self.assertEqual(decision['permissionDecision'],'deny');ask.assert_called_once()   # another kind still asks
         other=self.prepare()
         decision,ask=self.gate('mcp__fixture__mutate',directory=other['directory']);self.assertEqual(decision['permissionDecision'],'deny');ask.assert_called_once()   # another task still asks
-
-    def test_prep_never_writes_even_with_safe_mode_off(self):
-        self.prefs['safe']=False
-        decision,ask=self.gate('mcp__fixture__mutate',ATTICUS_AGENT_PREP='1',answer='y')
-        self.assertEqual(decision['permissionDecision'],'deny');ask.assert_not_called()
 
     def test_agent_bash_write_edit_need_approval_without_bypassing_hard_rules(self):
         for name,inp in [('Bash',{'command':'python3 -c "print(1)"'}),('Write',{'file_path':'result.csv','content':'x'}),('Edit',{'file_path':'result.csv'})]:
@@ -1172,10 +1151,6 @@ class AgentTests(unittest.TestCase):
             self.assertNotIn(row['id'],self.manager.rows);self.assertEqual(file.read_text(),'kept')
         self.assertTrue(all(r['id']==running['id'] for r in atticus.agent_history()))
 
-    def test_meeting_result_uses_existing_gather_without_second_connector_ask(self):
-        with patch.object(atticus,'meeting_connector_call',side_effect=AssertionError('No second connector ask')):
-            self.assertEqual(atticus.meeting_gather({'prepared':'Read-only brief','event':{'id':'event'}}),{'brief':'Read-only brief'})
-
     def test_a_dead_agent_restarts_once_on_its_session_then_fails_clearly(self):
         row=self.prepare('DIE mid-task');self.manager.start(row['id'])
         self.until(lambda:row['status']=='done');self.assertEqual([i for i,_ in self.spawned].count(row['id']),2)
@@ -1227,7 +1202,7 @@ class AgentTests(unittest.TestCase):
         for result,summary,links in (('Found three. [agent-result {"summary":"Compared three.",\n "links":["https://a.example"]}]\nAnything else?','Compared three.',['https://a.example']),
                                      ('Found three.\n[agent-result {"summary": broken}]','Found three.',[]),('[agent-result {"summary"','Done',[])):
             self.manager.finish(row,'done',result)
-            self.assertEqual((row['summary'],row['links']),(summary,links),result);self.assertNotIn('[agent-',row['preparedBrief'])
+            self.assertEqual((row['summary'],row['links']),(summary,links),result)
 
     def test_agent_learns_named_setup_and_replays_without_ai(self):
         row=self.prepare()
@@ -1365,39 +1340,3 @@ if (agentMade({ result: 'Filed it: ' + issue, made: [{ url: issue, title: 'Login
         result = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_finished_agents_fold_into_a_done_pill_and_expire_after_ten_minutes_on_screen(self):
-        page = (Path(__file__).resolve().parents[1] / 'ui' / 'agents.html').read_text()
-        cut = lambda a, b: page[page.index(a):page.index(b, page.index(a))]
-        code = cut('const ACTIVE=', 'const word=') + cut('const shelfRows=', 'const tops=') + cut('const steered=', '\n') + '\n' + cut('function paintPill(', 'function renderShelf(')
-        script = 'let rows=[],dismissed=new Set(),starting=new Set(),rested=new Set(),stack="",held="",expanded="";const el=()=>({append(){},dataset:{},style:{}}),hue=()=>"",tint=()=>"";\n' + code + r'''
-const fail = m => { console.error(m); process.exit(1); }, now = Date.now() / 1000;
-const label = (folded, total) => { const p = { dataset: {}, setAttribute(k, v) { this[k] = v; }, replaceChildren() {} }; paintPill(p, folded, total); return p['aria-label'].replace('. Show agents', ''); };
-const view = () => { const [shown, folded] = split(shelfRows()); return [shown.map(r => r.id).join(), folded.length ? label(folded, shelfRows().length) : '']; };
-const same = (got, want, what) => { if (JSON.stringify(got) !== JSON.stringify(want)) fail(what + ': ' + JSON.stringify(got)); };
-rows = [{ id: 'w', status: 'running', started: now - 9 }, { id: 'd1', status: 'done', ended: now - 120 }, { id: 'd2', status: 'done', ended: now - 30 },
-        { id: 'f', status: 'failed', ended: now - 60 }, { id: 's', status: 'stopped', ended: now - 5 }, { id: 'old', status: 'done', ended: now - 3600, seenAt: now - 700 }];
-for (const r of rows) if (fin(r)) onScreen.set(r.id, age(r));   // first sight after a restart: the wall clock since it finished or was last seen
-if (Math.round(onScreen.get('d1')) !== 120 || onScreen.get('old') !== LINGER) fail('restart age: ' + [...onScreen]);
-same(view(), ['w', '1 failed · 2 done'], 'working shows, finished fold; failed lingers and is counted apart, stopped and old ones do not');
-stack = 'open'; same(view(), ['w,d2,f,d1', ''], 'opened: working first, then newest finished');
-stack = 'min'; same(view(), ['', '1 agent · 1 failed · 2 done'], 'minimized hides all');
-stack = ''; onScreen.set('d2', LINGER); same(view(), ['w', '1 failed · 1 done'], '10 minutes on screen: it leaves');
-rows.push({ id: 'w2', status: 'running', started: now - 5 }, { id: 'w3', status: 'needs-you', started: now - 4, question: { q: 'ok?' } });
-same(view(), ['w3', '2 more · 1 failed · 1 done'], 'three working: the newest, plus the one asking');
-rows = [{ id: 'd', status: 'done', ended: now - 300 }]; onScreen.set('d', 0); same(view(), ['', '✓ 1 done'], 'only finished: just the pill');
-same(state(rows[0]), 'Done · 5m ago', 'finished chip line');
-rows = [{ id: 'f', status: 'failed', ended: now - 60 }]; onScreen.set('f', 0); same(view(), ['', '1 failed'], 'only failed: no check mark');
-'''
-        result = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_agent_view_keeps_titled_made_links_and_drops_cited_sources(self):
-        page = (Path(__file__).resolve().parents[1] / 'ui' / 'agents.html').read_text()
-        code = page[page.index('const host='):page.index('\n', page.index('const host='))] + '\n' + page[page.index('const KINDS='):page.index('function madeCards')] + page[page.index('const answer=r=>'):page.index('\n', page.index('const answer=r=>'))]
-        script = code + r'''
-const cite = 'https://example.com/review', issue = 'https://tracker.example.com/issues/12';
-const kept = things({ result: 'See [Review](' + cite + '). Filed ' + issue, made: [{ url: cite, title: '', type: '' }, { url: issue, title: 'Login fails', type: '' }] }).map(m => m.title);
-if (JSON.stringify(kept) !== JSON.stringify(['Login fails'])) { console.error(JSON.stringify(kept)); process.exit(1); }
-'''
-        result = subprocess.run(['node', '-e', script], capture_output=True, text=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stderr)

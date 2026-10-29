@@ -34,10 +34,10 @@ w.ob.models(['qwen3','llama4']);assert($('srv-model').value==='qwen3'&&!$('prov-
 $('prov-use').click();await until(()=>$('prov').hidden&&messages.some(m=>m.do==='provider'&&m.client==='claude'&&m.apiBase==='http://localhost:11434'&&m.apiModel==='qwen3'&&m.apiKey===''),'server choice to save');assert(true,'Use This Server saves it and closes');
 w.ob.plan({ok:false,need:'upgrade',client:'claude',text:'old Claude check'});assert(!$('p-claude').textContent.includes('old Claude check'),'A stale check for the old provider is ignored');
 w.ob.plan({ok:false,need:'install',client:'server',text:'Custom servers run through Claude Code.'});assert($('p-claude').querySelector('.txt b').textContent==='Custom Server'&&$('p-claude').querySelector('.allow').textContent==='Install','Server row offers to install Claude Code');
-$('client-alt').click();await until(()=>!$('prov').hidden,'provider sheet for Devin');d.querySelector('.opt[data-p="devin"]').click();assert($('prov-use').textContent==='Use Devin','Devin choice');
-$('prov').dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await until(()=>$('prov').hidden,'provider sheet to close');assert(!messages.some(m=>m.do==='provider'&&m.client==='devin'),'Escape cancels without saving');
-$('client-alt').click();await until(()=>!$('prov').hidden,'provider sheet for Pi');d.querySelector('.opt[data-p="pi"]').click();assert($('prov-use').textContent==='Use Pi','Pi choice');$('prov-use').click();await until(()=>messages.some(m=>m.do==='provider'&&m.client==='pi'),'Pi choice to save');assert(true,'Pi choice is saved');
-w.ob.plan({ok:true,need:'',client:'pi',text:'Pi is installed.'});assert($('p-claude').querySelector('.txt b').textContent==='Pi','Pi plan status is shown');
+$('client-alt').click();await until(()=>!$('prov').hidden,'provider sheet for Claude');d.querySelector('.opt[data-p="claude"]').click();assert($('prov-use').textContent==='Use Claude','Claude choice');
+$('prov').dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await until(()=>$('prov').hidden,'provider sheet to close');assert(!messages.some(m=>m.do==='provider'&&m.client==='claude'),'Escape cancels without saving');
+$('client-alt').click();await until(()=>!$('prov').hidden,'provider sheet for Local');d.querySelector('.opt[data-p="local"]').click();assert($('prov-use').textContent==='Use Local','Local choice');$('prov-use').click();await until(()=>messages.some(m=>m.do==='provider'&&m.client==='local'),'Local choice to save');assert(true,'Local choice is saved');
+w.ob.plan({ok:false,need:'download',client:'local',text:'Download the local model in Settings → Intelligence.'});assert($('p-claude').querySelector('.txt b').textContent==='Local Model'&&$('p-claude').querySelector('.allow').textContent==='Download','Local plan status offers the download');
 w.ob.plan({ok:true,need:'',client:'server',text:'Using a custom server.'});await go('agents');
 await until(()=>messages.some(m=>m.do==='connectors'),'connector status request');assert(true,'Agents step asks for connector status');
 w.ob.set({mic:true,speech:true,ax:true,screen:false,auto:true,chrome:false,calendar:true,tools:true});w.ob.connectors({connected:['Gmail'],signin:['Notion']});
@@ -50,7 +50,7 @@ assert($('enable').hidden&&$('agents-next').textContent==='Continue','All on: Co
 await go('try');assert($('try-next').hidden,'Try Next waits for shortcut');
 w.ob.tried();await until(()=>!$('try-next').hidden&&$('try-skip').hidden,'Try Next button');assert(true,'Shortcut enables Next');
 await go('mac');assert(!!$('mac-mini')&&$('mac').textContent.includes('background'),'Mac preview explains background work and live mini screen');await go('text');await go('dictate');
-const P0={draw:true,meeting:false,routing:'balanced',dictateMode:'verbatim',dictateHotkeyLabel:''},keysIn=()=>[...$('dc-field').querySelectorAll('i')].map(i=>i.textContent).join('');
+const P0={draw:true,routing:'balanced',dictateMode:'verbatim',dictateHotkeyLabel:''},keysIn=()=>[...$('dc-field').querySelectorAll('i')].map(i=>i.textContent).join('');
 w.ob.prefs(P0);assert($('dc-field').textContent==='Record Shortcut'&&$('dc-clear').hidden&&$('dc-mode').classList.contains('dim'),'Dictation starts with no shortcut and its mode greyed');
 $('dc-field').click();await until(()=>messages.some(m=>m.do==='recordDictate')&&$('dc-field').classList.contains('rec'),'dictation recorder');assert($('dc-field').textContent==='Type Shortcut','Clicking the field records the next keys');
 w.ob.rec('⌃⌥');assert(keysIn()==='⌃⌥','Held keys show live');w.ob.prefs(P0);assert($('dc-field').classList.contains('rec')&&keysIn()==='⌃⌥','The every-second refresh leaves a recording alone');
@@ -62,9 +62,9 @@ const ex=d.querySelectorAll('#dc-ex button');assert(ex.length===5&&$('dictate').
 ex[1].click();await until(()=>ex[1].getAttribute('aria-pressed')==='true'&&$('dc-said').textContent.includes('scratch')&&$('dc-said').querySelector('.x'),'chosen dictation example');assert(ex[0].getAttribute('aria-pressed')==='false','Picking an example plays it, with the dropped words marked');
 $('dc-field').click();await until(()=>$('dc-field').classList.contains('rec'),'dictation recording');await go('point');await until(()=>messages.some(m=>m.do==='cancelRecord'),'recording cancellation');assert(true,'Leaving mid-recording cancels it');
 assert($('point').textContent.includes('whiteboard')&&d.querySelectorAll('#wb-card [data-s]').length===3,'Draw on screen shows the whiteboard explanation');
-assert(d.querySelector('[data-k="draw"]').checked&&!d.querySelector('[data-k="meeting"]').checked,'Switches reflect prefs');
+assert(d.querySelector('[data-k="draw"]').checked,'Switches reflect prefs');
 d.querySelector('[data-k="draw"]').click();await until(()=>messages.some(m=>m.do==='set'&&m.k==='draw'&&m.v==='false'),'draw preference');assert(true,'Switch sends native preference');
-w.ob.plan({ok:true,need:'',client:'pi',text:'Pi is installed.'});d.querySelector('#point [data-go="work"]').click();await until(()=>d.querySelector('.page.on')?.id==='meeting','Pi meeting page');page('meeting');
+w.ob.plan({ok:true,need:'',client:'local',text:'Using the local model on this Mac.'});d.querySelector('#point [data-go="work"]').click();await until(()=>d.querySelector('.page.on')?.id==='improve','Local skips to the improve page');page('improve');
 $('back').click();await until(()=>d.querySelector('.page.on')?.id==='point','point page');page('point');
 w.ob.plan({ok:true,need:'',client:'server',text:'Using a custom server.'});w.ob.prefs(P0);await go('work');assert($('wk-brain').hidden,'A custom server hides Intelligence');
 w.ob.plan({ok:true,need:'',client:'claude',text:'Signed in.'});w.ob.prefs(P0);
@@ -73,13 +73,10 @@ d.querySelector('[data-k=routing] [data-v=cheapest]').click();await until(()=>me
 assert(messages.some(m=>m.do==='set'&&m.k==='routing'&&m.v==='cheapest')&&$('wk-why').textContent.includes('least'),'Work choices save and explain themselves');
 assert($('work').textContent.includes('⌃⌥↩'),'The work page names the move shortcut');
 for(const e of $('work').querySelectorAll('.row')){const r=e.getBoundingClientRect();assert(r.right<=640&&r.bottom<=612,'Fits window work / '+e.textContent.slice(0,12))}
-await go('meeting');assert($('meeting').textContent.includes('Settings → Meetings')&&!!$('mt-archive'),'Meeting preview includes the local archive');await go('improve');
+await go('improve');
 for(const e of $('improve').children){const r=e.getBoundingClientRect();assert(r.left>=0&&r.right<=640&&r.top>=0&&r.bottom<=612,'Fits window improve / '+e.className)}
 assert($('improve').textContent.includes('Anonymous')&&d.querySelector('#improve .bar2 .btn:not(.quiet)').textContent==='Help Improve','Improve page says what is sent; Help Improve is the main action');
-d.querySelector('#improve [data-improve="true"]').click();await until(()=>d.querySelector('.page.on')?.id==='tip','tip page');page('tip');
-for(const e of $('tip').children){const r=e.getBoundingClientRect();assert(r.left>=0&&r.right<=640&&r.top>=0&&r.bottom<=612,'Fits window tip / '+(e.id||e.className))}
-assert($('tip').textContent.includes('really support me')&&$('kofi').textContent.includes('Leave a Tip'),'Tip page asks for a tip on its own screen');
-$('kofi').click();await until(()=>messages.some(m=>m.do==='kofi'),'tip request');assert(true,'Leave a Tip opens the tip page');assert(d.querySelector('.page.on').id==='tip','Tipping stays on the tip page');
+d.querySelector('#improve [data-improve="true"]').click();await until(()=>d.querySelector('.page.on')?.id==='done','done page');
 await go('done');
 w.ob.prefs({...P0,dictateHotkeyLabel:'fn⌃⌥⇧⌘Return'});
 assert($('ideas').textContent.includes('Convert this JPEG to PNG'),'Things to try includes file conversion');

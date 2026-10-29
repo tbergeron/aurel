@@ -20,7 +20,7 @@ class DictationCleanupTests(unittest.TestCase):
         sys.path.insert(0, str(ROOT))
         import atticus
         with patch.object(atticus, 'relevant_rules', return_value='Spell my name Saarth.'), \
-             patch.object(atticus, 'meeting_call', return_value=('<cleaned>Clean text.</cleaned>', {})) as call:
+             patch.object(atticus, 'one_shot', return_value=('<cleaned>Clean text.</cleaned>', {})) as call:
             cleaned = atticus.dictate_cleanup('um Clean text. ' + 'x' * 7000)
         self.assertTrue(cleaned.startswith('Clean text. '))
         self.assertNotIn('\n', cleaned)
@@ -31,10 +31,7 @@ class DictationCleanupTests(unittest.TestCase):
             self.assertEqual(kwargs['label'], 'Dictation cleanup')
             self.assertIn('Spell my name Saarth.', args[1])
             self.assertLessEqual(len(args[1]), 7100)
-        paragraph = 'a ' * 3000 + '\n\n' + 'b ' * 3000
-        with patch.object(atticus, 'client', return_value='pi'):
-            self.assertEqual(atticus.dictate_cleanup(paragraph), paragraph.replace(' \n\n', '\n\n').strip())
-        with patch.object(atticus, 'meeting_call') as empty:
+        with patch.object(atticus, 'one_shot') as empty:
             self.assertEqual(atticus.dictate_cleanup('   '), '')
             empty.assert_not_called()
 
@@ -43,7 +40,7 @@ class DictationCleanupTests(unittest.TestCase):
         source = 'I um need this. ' + ('word ' * 1400) + 'Uh, final words.'
         with patch.object(atticus, 'client', return_value='claude'), \
              patch.object(atticus, 'relevant_rules', return_value=''), \
-             patch.object(atticus, 'meeting_call', side_effect=RuntimeError('offline')):
+             patch.object(atticus, 'one_shot', side_effect=RuntimeError('offline')):
             cleaned = atticus.dictate_cleanup(source)
         self.assertIn('final words.', cleaned)
         self.assertNotRegex(cleaned.lower(), r'\b(?:um|uh)\b')
@@ -53,7 +50,7 @@ class DictationCleanupTests(unittest.TestCase):
         import atticus
         self.assertEqual(atticus.dictate_result('he go to school', '<cleaned>He goes to school.</cleaned>'), 'He goes to school.')
         with patch.object(atticus, 'relevant_rules', return_value='Spell my name Saarth.'), \
-             patch.object(atticus, 'meeting_call', return_value=('<cleaned>My name is Saarth.</cleaned>', {})):
+             patch.object(atticus, 'one_shot', return_value=('<cleaned>My name is Saarth.</cleaned>', {})):
             self.assertEqual(atticus.dictate_cleanup('My name is Sarth.'), 'My name is Saarth.')
 
     def test_hint_scan_is_bounded_at_the_largest_dictionary(self):
@@ -90,29 +87,18 @@ class DictationCleanupTests(unittest.TestCase):
         })()
         self.assertEqual(atticus.dictate_warmed(process, 'I um need this.', ''), 'I need this.')
 
-    def test_non_claude_cleanup_falls_back_without_starting_claude(self):
-        import atticus
-        with patch.object(atticus, 'client', return_value='pi'), patch.object(atticus, 'meeting_call') as call:
-            self.assertEqual(atticus.dictate_cleanup('Um, keep every word.'), 'keep every word.')
-        call.assert_not_called()
-        with patch.object(atticus, 'client', return_value='pi'), patch.object(atticus, 'meeting_process') as process, \
-             patch('sys.stdin', io.StringIO('Um, keep every word.')), patch('sys.stdout', new_callable=io.StringIO) as out:
-            atticus.dictate_cleanup_wait()
-        process.assert_not_called()
-        self.assertEqual(out.getvalue(), 'keep every word.\n')
-
     def test_short_dictation_skips_ai_and_cursor_text_reaches_cleanup(self):
         import atticus
-        with patch.object(atticus, 'client', return_value='claude'), patch.object(atticus, 'meeting_call') as call:
+        with patch.object(atticus, 'client', return_value='claude'), patch.object(atticus, 'one_shot') as call:
             self.assertEqual(atticus.dictate_cleanup('Um, okay'), 'okay')
         call.assert_not_called()
-        with patch.object(atticus, 'client', return_value='claude'), patch.object(atticus, 'meeting_process'), \
+        with patch.object(atticus, 'client', return_value='claude'), patch.object(atticus, 'one_shot_process'), \
              patch.object(atticus, 'stop_claude'), patch.object(atticus, 'dictate_warmed') as warmed, \
              patch('sys.stdin', io.StringIO('Notes from Saarth\0uh I')), patch('sys.stdout', new_callable=io.StringIO) as out:
             atticus.dictate_cleanup_wait()
         warmed.assert_not_called()
         self.assertEqual(out.getvalue(), 'I\n')
-        with patch.object(atticus, 'client', return_value='claude'), patch.object(atticus, 'meeting_process'), \
+        with patch.object(atticus, 'client', return_value='claude'), patch.object(atticus, 'one_shot_process'), \
              patch.object(atticus, 'stop_claude'), patch.object(atticus, 'relevant_rules', return_value=''), \
              patch.object(atticus, 'dictate_warmed', return_value='Tell Saarth hi.') as warmed, \
              patch('sys.stdin', io.StringIO('Notes from Saarth\0tell sarth hi')), patch('sys.stdout', new_callable=io.StringIO) as out:
@@ -126,7 +112,7 @@ class DictationCleanupTests(unittest.TestCase):
     def test_cleanup_start_failure_still_returns_local_cleanup(self):
         import atticus
         with patch.object(atticus, 'client', return_value='claude'), \
-             patch.object(atticus, 'meeting_process', side_effect=OSError('missing')), \
+             patch.object(atticus, 'one_shot_process', side_effect=OSError('missing')), \
              patch('sys.stdin', io.StringIO('I um need uh every word.')), \
              patch('sys.stdout', new_callable=io.StringIO) as out:
             atticus.dictate_cleanup_wait()
@@ -143,7 +129,7 @@ class DictationCleanupTests(unittest.TestCase):
         def hints(*_):
             self.assertTrue(started)
             return {}
-        with patch.object(atticus, 'client', return_value='claude'), patch.object(atticus, 'meeting_process'), \
+        with patch.object(atticus, 'client', return_value='claude'), patch.object(atticus, 'one_shot_process'), \
              patch.object(atticus, 'stop_claude'), patch.object(atticus.threading, 'Timer', Timer), \
              patch.object(atticus, 'dictate_hints', side_effect=hints), patch.object(atticus, 'dictate_warmed', return_value='Keep every word.'), \
              patch('sys.stdin', io.StringIO('keep every word')), patch('sys.stdout', new_callable=io.StringIO) as out:
@@ -275,14 +261,18 @@ final class Target {
         if deferred { pending = work } else { work() }
     }
 }
+enum TextSelection { static func capture(_ app: AppRef, enabled: Bool) -> Target? { nil } }
 final class Harness {
     var dictateSelection: Target?, busy = true, dictating = true, dictateID = 1
     var failed: [String] = []
     func cue(_ value: String) {}
     func js(_ call: String, _ arg: Any? = nil) {}
     func hide(after: Double, shrink: Bool = false) {}
-    func prepareDictation(_ value: String, target: Target) -> () -> Void { {} }
+    func prepareDictation(_ value: String, target: Target, whole: String? = nil) -> () -> Void { {} }
     func dictationDeliveryFailed(_ value: String) { failed.append(value); busy = false; dictating = false }
+    var liveTyped = "", liveTyping = false, dictationTargetApp: AppRef?   // Type as I talk: off in these fixtures
+    func liveRest(_ heard: String) -> String { heard }
+    func fitted(_ words: String, into target: Target) -> String { words }
     func recordDictationEvent(_ insert: String) {}
 ''' + method + r'''}
 let user = AppRef(1), other = AppRef(2), target = Target(user), h = Harness()
@@ -377,37 +367,36 @@ print("single delivery fallback ok")
         self.assertIn('SpeechTranscriber(locale: en, transcriptionOptions: [], reportingOptions: [.volatileResults]', module)
         self.assertIn('transcriptionOptions: [.punctuation], reportingOptions: [.volatileResults]', module)
 
-    def test_whisper_feeds_raw_samples_and_skips_apple_speech(self):
-        # Oct 28, 2026: AnalyzerInput traps inside Speech.framework on a plain 16 kHz Float32 buffer, so Whisper gets raw samples.
+    def test_parakeet_feeds_raw_samples_and_skips_apple_speech(self):
+        # Oct 28, 2026: AnalyzerInput traps inside Speech.framework on a plain 16 kHz Float32 buffer, so Whisper (now Parakeet) gets raw samples.
         source = (ROOT / 'Atticus.swift').read_text()
         start = source[source.index('    func start(dictate: Bool'):source.index('    func heard(')]
-        self.assertIn('guard whisper || dictate || SFSpeechRecognizer.authorizationStatus() == .authorized', start)
-        self.assertLess(start.index('guard !whisper || Whisper.shared.ready'), start.index('listenID += 1'))
-        self.assertIn('if whisper { pcm.append(out) } else { self?.speechInputs?.yield(AnalyzerInput(buffer: out)) }', start)
-        self.assertIn('if whisper { pcm.append(buf) } else { self?.speechInputs?.yield(AnalyzerInput(buffer: buf)) }', start)
-        self.assertIn('if whisper { whisperTick(listeningID) }', start)   # live words, and long segments close on a pause
+        self.assertIn('guard parakeet || dictate || SFSpeechRecognizer.authorizationStatus() == .authorized', start)
+        self.assertLess(start.index('guard !parakeet || Parakeet.shared.ready'), start.index('listenID += 1'))
+        self.assertIn('if parakeet { pcm.append(out) } else { self?.speechInputs?.yield(AnalyzerInput(buffer: out)) }', start)
+        self.assertIn('if parakeet { pcm.append(buf) } else { self?.speechInputs?.yield(AnalyzerInput(buffer: buf)) }', start)
+        self.assertIn('if parakeet { parakeetTick(listeningID) }', start)   # live words, and long segments close on a pause
         prepare = source[source.index('    func prepareSpeech()'):source.index('    var text =')]
-        self.assertLess(prepare.index('Whisper.shared.warm(); return'), prepare.index('AssetInventory'))
+        self.assertLess(prepare.index('Parakeet.shared.warm(); return'), prepare.index('AssetInventory'))
 
-    def test_whisper_results_from_an_old_listen_are_dropped(self):
+    def test_parakeet_results_from_an_old_listen_are_dropped(self):
         source = (ROOT / 'Atticus.swift').read_text()
-        tick = source[source.index('    func whisperTick('):source.index('    func start(dictate: Bool')]
-        self.assertIn('guard let self, self.whisperAsk == ask else { return }', tick)
+        tick = source[source.index('    func parakeetTick('):source.index('    func start(dictate: Bool')]
+        self.assertIn('guard let self, self.parakeetAsk == ask else { return }', tick)
         self.assertIn('guard let self, self.listenID == listeningID else { return }', tick)
         self.assertIn('await prev?.value', tick)   # final passes stay in order
         stop = source[source.index('    func stop()', source.index('final class App')):source.index('    func applyReplacement(')]
-        self.assertIn('engine.stop { inputs?.finishAll(); whisperFlush?() }', stop)
-        self.assertIn('min(15, 4 + 0.15 * (whisperAudio.seconds + whisperQueued))', stop)
-        self.assertLess(stop.index('if whisperListen'), stop.index('Finalizing can hang'))
+        self.assertIn('engine.stop { inputs?.finishAll(); parakeetFlush?() }', stop)
+        self.assertIn('min(15, 4 + 0.15 * (parakeetAudio.seconds + parakeetQueued))', stop)
+        self.assertLess(stop.index('if parakeetListen'), stop.index('Finalizing can hang'))
 
-    def test_whisper_settings_bridge(self):
+    def test_parakeet_settings_bridge(self):
         source = (ROOT / 'Atticus.swift').read_text()
         settings = source[source.index('final class SettingsWindow'):]
-        for case in ['case "whisperDownload"', 'case "whisperCancel"', 'case "whisperDelete"', 'case "whisperInstall"']:
+        for case in ['case "parakeetDownload"', 'case "parakeetCancel"', 'case "parakeetDelete"']:
             self.assertIn(case, settings)
-        self.assertIn('send("whisper", Whisper.shared.status())', settings[settings.index('    func push()'):])
-        self.assertIn('brew install whisper.cpp', settings[settings.index('    func whisperInstall()'):])
-        self.assertIn('if k == "whisperModel" { Whisper.shared.restart()', settings)
+        self.assertIn('send("parakeet", Parakeet.shared.status())', settings[settings.index('    func push()'):])
+        self.assertIn('if k == "parakeetModel" { Parakeet.shared.restart()', settings)
 
     def test_fn_and_modifier_only_shortcuts_use_flags_events(self):
         source = (ROOT / 'Atticus.swift').read_text()
@@ -524,6 +513,7 @@ final class Target {
         if deferred { pending = work } else { work() }
     }
 }
+enum TextSelection { static func capture(_ app: AppRef, enabled: Bool) -> Target? { nil } }
 final class Harness {
     var dictateSelection: Target?, busy = false, dictating = true, dictateID = 1, dictateCleanup = false
     var dictationAppName = "App", lastDictation: String?
@@ -534,8 +524,11 @@ final class Harness {
     func js(_ call: String, _ arg: Any? = nil) {
         if let d = arg as? [String: Any] { log.append("\(call) \(d["text"]!) \(d["ok"]!)"); if let w = d["words"] as? String { words.append(w) } } else { log.append("\(call) \(arg as? String ?? "")") }
     }
-    func prepareDictation(_ value: String, target: Target) -> () -> Void { {} }
+    func prepareDictation(_ value: String, target: Target, whole: String? = nil) -> () -> Void { {} }
     func recordDictationEvent(_ insert: String) {}
+    var liveTyped = "", liveTyping = false, dictationTargetApp: AppRef?   // Type as I talk: off in these fixtures
+    func liveRest(_ heard: String) -> String { heard }
+    func fitted(_ words: String, into target: Target) -> String { words }
     func hush() { dictating = false; dictateID += 1; busy = false }
     func shush() {}
     func close(clear: Bool) { log.append("close"); hush() }

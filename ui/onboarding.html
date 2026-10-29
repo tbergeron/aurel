@@ -99,14 +99,8 @@
   .opt .txt span { margin-top: 2px; }
   .opt .dot { flex: none; width: 16px; height: 16px; border-radius: 50%; box-sizing: border-box; box-shadow: inset 0 0 0 1.5px var(--fg3); }
   .opt[aria-checked="true"] .dot { box-shadow: inset 0 0 0 5px var(--accent); }
-  .opt:focus-visible, .chip:focus-visible, .fld:focus-visible { outline: 3px solid rgba(10,132,255,.45); outline-offset: 1px; }
-  #srv { margin-top: 12px; display: grid; gap: 8px; }
-  .chips { display: flex; gap: 6px; } .chips span { align-self: center; font-size: 11.5px; color: var(--fg3); margin-right: 2px; }
-  .chip { height: 24px; padding: 0 10px; border: 0; border-radius: 12px; cursor: pointer; font: 500 11.5px system-ui; color: var(--fg); background: rgba(127,127,127,.14); }
-  .chip:hover { background: rgba(127,127,127,.22); } .chip.on { color: #fff; background: var(--accent); }
-  .fld { width: 100%; box-sizing: border-box; height: 30px; padding: 0 10px; border: 0; border-radius: 8px; font: 13px system-ui; color: var(--fg);
+  .opt:focus-visible { outline: 3px solid rgba(10,132,255,.45); outline-offset: 1px; }
     background: var(--field); box-shadow: inset 0 0 0 .5px var(--line); -webkit-user-select: text; outline: none; }
-  #srv-note { min-height: 15px; font-size: 11.5px; color: var(--fg3); } #srv-note.bad { color: #ff453a; }
   #prov .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; } #prov .acts .btn { margin: 0; height: 30px; padding: 0 16px; font-size: 13px; }
   #prov .acts .btn:disabled { opacity: .45; pointer-events: none; }
   .row.ok .allow { display: none; } .row.ok .check { display: block; margin: 0 21px; }
@@ -167,19 +161,7 @@
     box-shadow: inset 0 0 0 .5px var(--line), 0 10px 30px rgba(0,0,0,.12); }
   .bar2 { display: flex; gap: 10px; margin-top: 26px; }
   .bar2 .btn { margin-top: 0; }
-  /* the tip page: one warm heart, then Leave a Tip beside Next */
-  #tip-heart { width: 72px; height: 72px; margin-bottom: 20px; border-radius: 22px; display: grid; place-items: center;
-    background: linear-gradient(160deg, #ff7a8a, #ff375f); box-shadow: 0 10px 28px rgba(255,55,95,.32), inset 0 .5px 0 rgba(255,255,255,.35); }
-  #tip-heart svg { width: 36px; height: 36px; fill: #fff; }
-  #tip.on #tip-heart { animation: beat 1.6s .5s var(--ease) 2; }
-  @keyframes beat { 0%, 100% { transform: none; } 15% { transform: scale(1.1); } 30% { transform: none; } 45% { transform: scale(1.06); } }
-  #tip p.sub { max-width: 420px; }
-  #kofi { display: inline-flex; align-items: center; gap: 7px; background: #ff375f; }
-  #kofi svg { width: 15px; height: 15px; fill: #fff; }
-  #tip .done-note { margin-top: 18px; }
-  @media (prefers-reduced-motion: reduce) { #tip.on #tip-heart { animation: none; } }
   .done-note { height: 18px; margin-top: 12px; font-size: 12.5px; color: var(--fg3); }
-  #feedback-note .alt { margin: 0; font-size: 12.5px; }
   .done-note a { color: var(--accent); cursor: pointer; } .done-note a:hover { text-decoration: underline; }
   .fake { position: absolute; border-radius: 10px; background: rgba(28,28,30,.92); color: #f5f5f7; box-shadow: 0 8px 24px rgba(0,0,0,.3), inset 0 0 0 .5px rgba(255,255,255,.12);
     font: 12px/1.4 system-ui; transition: opacity .45s var(--ease), transform .55s var(--out); }
@@ -204,24 +186,6 @@
   #pad::selection { background: rgba(10,132,255,.35); }
   #pad:focus { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px rgba(10,132,255,.18); }
 
-  /* meeting preview: someone talks, the question is spotted, the answer grows in */
-  #mt-panel { right: 22px; top: 14px; bottom: 14px; width: 214px; padding: 10px 11px; overflow: hidden; }
-  #mt-save { color:#8cbda1;font-size:10px;margin-bottom:8px; }
-  #mt-archive { font-size:12px;line-height:1.5;margin-top:8px; } #mt-archive p { color:#a1a1a6;margin:8px 0; } #mt-archive small { color:#8e8e93; }
-  #mt-panel .hd { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #a1a1a6; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
-  #mt-panel .hd i { width: 7px; height: 7px; border-radius: 50%; background: #ff453a; animation: blink 1.6s ease-in-out infinite; }
-  .mt-card { padding: 8px 9px; border-radius: 9px; background: rgba(255,255,255,.07); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.1); transition: opacity .4s var(--ease), transform .5s var(--out); }
-  .mt-card small { display: block; font-size: 10px; color: #8e8e93; }
-  .mt-card p { margin: 2px 0 0; font-size: 11.5px; }
-  .mt-ans { overflow: hidden; max-height: 0; opacity: 0; transition: max-height .5s var(--out), opacity .4s; }
-  .mt-ans.on { max-height: 60px; opacity: 1; }
-  .mt-ans b { display: block; margin-top: 6px; padding-top: 6px; border-top: .5px solid rgba(255,255,255,.12); font-size: 12px; }
-  .mt-think { display: inline-block; margin-top: 6px; font-size: 10.5px; color: #8e8e93; }
-  #mt-call { position: absolute; left: 18px; top: 14px; bottom: 14px; width: 150px; display: grid; grid-template-rows: 1fr 1fr; gap: 8px; }
-  #mt-call div { border-radius: 10px; background: linear-gradient(135deg, rgba(48,176,199,.45), rgba(10,132,255,.3)); position: relative; transition: box-shadow .3s; }
-  #mt-call div + div { background: linear-gradient(135deg, rgba(191,90,242,.4), rgba(255,55,95,.25)); }
-  #mt-call div::after { content: attr(data-n); position: absolute; left: 8px; bottom: 6px; font: 500 10.5px system-ui; color: #fff; }
-  #mt-call div.talk { box-shadow: 0 0 0 2px #30d158; }
   .mt-row { display: flex; align-items: center; gap: 12px; width: min(420px, 100%); margin-top: 14px; padding: 10px 14px; box-sizing: border-box; border-radius: 12px; text-align: left;
     background: var(--card); box-shadow: inset 0 0 0 .5px var(--line); }
   .txt span.beta { display: inline; margin-top: 0; font: 600 9.5px system-ui; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); background: rgba(10,132,255,.12);
@@ -476,24 +440,6 @@
   <div class="list r">
     <div class="row" id="wk-brain"><div class="txt"><b>Intelligence</b><span id="wk-why"></span></div><div class="seg" data-k="routing" role="group" aria-label="Intelligence"><button data-v="cheapest">Cheapest</button><button data-v="balanced">Balanced</button><button data-v="capable">Most capable</button></div></div>
   </div>
-  <div class="bar2 r"><button class="btn quiet" data-go="meeting">Skip</button><button class="btn" data-go="meeting">Next</button></div>
-</section>
-
-<section class="page" id="meeting">
-  <div class="kicker r">Meeting Copilot · Beta</div>
-  <h2 class="r">Answers while you’re on the call</h2>
-  <p class="sub r">Hear the call, get help with questions, then revisit transcripts, recaps and action items in Settings → Meetings. Saved on this Mac.</p>
-  <div class="stage r" aria-hidden="true">
-    <div id="mt-call"><div data-n="Dana" id="mt-dana"></div><div data-n="Lee"></div></div>
-    <div class="fake" id="mt-panel">
-      <div class="hd"><i></i>Listening · <span id="mt-clock">12:04</span></div><div id="mt-save">Saving transcript on this Mac</div><div id="mt-archive" hidden><b>Your meeting</b><p>Pilot budget approved: $18,000.</p><small>Action item · Send the notes</small></div>
-      <div class="mt-card gone2" id="mt-q"><small>12:05</small><p>What budget did we approve?</p>
-        <span class="mt-think" id="mt-think">Thinking…</span><div class="mt-ans" id="mt-ans"><b>The approved budget is $18,000.</b></div></div>
-    </div>
-  </div>
-  <div class="mt-row r"><div class="ic" style="background:#30b0c7"><svg viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/></svg></div>
-    <div class="txt"><b>Turn on Meeting Copilot<span class="beta">Beta</span></b><span id="mt-hint"></span></div>
-    <label class="sw"><input type="checkbox" data-k="meeting" aria-label="Meeting Copilot"></label></div>
   <div class="bar2 r"><button class="btn quiet" data-go="improve">Skip</button><button class="btn" data-go="improve">Next</button></div>
 </section>
 
@@ -510,14 +456,6 @@
       <div class="txt"><b>Cleaned first</b><span>Emails, numbers, file paths and anything typed for you are removed before it leaves your Mac.</span></div></div>
   </div>
   <div class="bar2 r"><button class="btn quiet" data-improve="false">Not Now</button><button class="btn" data-improve="true">Help Improve</button></div>
-</section>
-
-<section class="page" id="tip">
-  <div id="tip-heart" class="r" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.6-7.5 10.2-7.5 10.2z"/></svg></div>
-  <h2 class="r">Atticus is free and open source</h2>
-  <p class="sub r">If you ever find yourself enjoying Atticus, a small tip goes a long way. It keeps Atticus free for everyone, and it would really support me.</p>
-  <div class="bar2 r"><button class="btn" id="kofi"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.6-7.5 10.2-7.5 10.2z"/></svg>Leave a Tip</button><button class="btn quiet" data-go="done" id="tip-next">Next</button></div>
-  <p class="done-note r">You can always find “Leave a Tip” in the menu bar later.</p>
 </section>
 
 <section class="page" id="done">
@@ -545,7 +483,6 @@
   <h1 class="r">Go use Atticus. <span>Be great.</span></h1>
   <p class="sub r" id="done-sub">Hold the shortcut anywhere and try one.</p>
   <button class="btn r" id="finish">Start Using Atticus</button>
-  <p class="done-note r" id="feedback-note">Atticus is new and growing, and your feedback helps a lot. <button class="alt" id="feedback-link">Report feedback ↗</button></p>
 </section>
 
 <div id="prov" hidden role="dialog" aria-modal="true" aria-labelledby="prov-h">
@@ -553,18 +490,8 @@
     <h3 id="prov-h">Choose your AI provider</h3>
     <p>Atticus thinks with one of these. Change it anytime in Settings.</p>
     <div role="radiogroup" aria-labelledby="prov-h">
+      <button class="opt" role="radio" data-p="local"><span class="dot"></span><div class="txt"><b>Local</b><span>Runs on this Mac. Free, private, nothing to install.</span></div></button>
       <button class="opt" role="radio" data-p="claude"><span class="dot"></span><div class="txt"><b>Claude</b><span>Your Claude Pro or Max plan, through Claude Code.</span></div></button>
-      <button class="opt" role="radio" data-p="devin"><span class="dot"></span><div class="txt"><b>Devin</b><span>Your Devin plan, through the Devin CLI.</span></div></button>
-      <button class="opt" role="radio" data-p="pi"><span class="dot"></span><div class="txt"><b>Pi</b><span>The provider and model set in the Pi CLI, including local models.</span></div></button>
-      <button class="opt" role="radio" data-p="server"><span class="dot"></span><div class="txt"><b>Custom server</b><span>Ollama, LM Studio, DeepSeek or any Claude-style API.</span></div></button>
-    </div>
-    <div class="chips" id="local-offer" hidden><span id="local-running"></span><button class="chip" id="local-use"></button></div>
-    <div id="srv" hidden>
-      <div class="chips"><span>Quick fill</span><button class="chip" data-base="http://localhost:11434">Ollama</button><button class="chip" data-base="http://localhost:1234">LM Studio</button><button class="chip" data-base="https://api.deepseek.com/anthropic">DeepSeek</button></div>
-      <input class="fld" id="srv-base" placeholder="Server address, like http://localhost:11434" spellcheck="false" aria-label="Server address">
-      <input class="fld" id="srv-key" type="password" placeholder="Key (not needed for local servers)" aria-label="Server key">
-      <input class="fld" id="srv-model" list="srv-models" placeholder="Model" spellcheck="false" aria-label="Model"><datalist id="srv-models"></datalist>
-      <div id="srv-note" aria-live="polite"></div>
     </div>
     <div class="acts"><button class="btn quiet" id="prov-cancel">Cancel</button><button class="btn" id="prov-use">Use Claude</button></div>
   </div>
@@ -576,9 +503,9 @@
 <script type="module">
   const $ = id => document.getElementById(id);
   const post = m => window.webkit?.messageHandlers.ob.postMessage(m);
-  const pages = ['welcome', 'perms', 'agents', 'try', 'mac', 'text', 'dictate', 'point', 'work', 'meeting', 'improve', 'tip', 'done'];
+  const pages = ['welcome', 'perms', 'agents', 'try', 'mac', 'text', 'dictate', 'point', 'work', 'improve', 'done'];
   let cur = '', orbWake = null;
-  const skip = id => ['devin', 'pi'].includes(provider) && ['agents', 'work'].includes(id);   // their CLIs run no Atticus agents
+  const skip = id => provider === 'local' && ['agents', 'work'].includes(id);   // background agents need Claude Code
   const go = id => {
     while (skip(id)) id = pages[pages.indexOf(id) + 1];
     if (recording) post({ do: 'cancelRecord' });
@@ -593,21 +520,17 @@
   $('back').onclick = () => { let i = pages.indexOf(cur) - 1; while (skip(pages[i])) i--; go(pages[i]); };
   $('skip-all').onclick = () => go('improve');   // skips the tour only: the improve, tip and done pages still show
   $('finish').onclick = () => post({ do: 'done' });
-  $('kofi').onclick = () => post({ do: 'kofi' });
-  $('feedback-link').onclick = () => post({ do: 'feedback' });   // Settings → Report feedback, over this window
-  document.querySelectorAll('[data-improve]').forEach(b => b.onclick = () => { post({ do: 'set', k: 'improve', v: b.dataset.improve }); go('tip'); });
+  document.querySelectorAll('[data-improve]').forEach(b => b.onclick = () => { post({ do: 'set', k: 'improve', v: b.dataset.improve }); go('done'); });
   document.querySelectorAll('.sw input').forEach(i => i.onchange = () => post({ do: 'set', k: i.dataset.k, v: String(i.checked) }));
   let prefs = {};
   const WHY = { cheapest: 'Haiku for every ask. Fastest, and uses the least of your plan.', balanced: 'Haiku for quick asks. Your work model takes over real work.',
     capable: 'Your work model for every ask. Slower, and uses the most of your plan.' };
   const paintPrefs = () => {
-    const other = ['devin', 'pi'].includes(provider);
     document.querySelectorAll('.seg[data-k]').forEach(g => g.querySelectorAll('button').forEach(b => {
       const on = prefs[g.dataset.k] === b.dataset.v; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
     }));
     $('wk-why').textContent = WHY[prefs.routing] || '';
     $('safe-note').hidden = prefs.safe === false;
-    $('wk-brain').hidden = $('wk-plan').hidden = provider === 'server';   // a custom server runs one model
     if (!recording) dcKeys(prefs.dictateHotkeyLabel || '', 'Record Shortcut');
     if (prefs.hotkeyLabel && prefs.hotkeyLabel !== talkLabel) {   // the talk shortcut as set; redrawn only when it changes, so held keys stay lit
       talkLabel = prefs.hotkeyLabel;
@@ -619,9 +542,7 @@
     $('dc-key').textContent = key || 'fn'; $('dc-globe').hidden = !prefs.globeTaken;
     $('idea-dict').hidden = !key; $('idea-key').replaceChildren(...capsOf(key || '').map(c => Object.assign(document.createElement('kbd'), { textContent: c })));
     $('dc-mode').classList.toggle('dim', !prefs.dictateHotkeyLabel);
-    document.querySelector('[data-k=dictateMode] [data-v=cleanup]').disabled = other;
-    $('dc-mode-hint').textContent = other ? 'Clean up needs Claude.' : 'Clean up tidies it as shown. Verbatim types every word.';
-    $('mt-hint').textContent = other ? `With ${NAMES[provider]}, it saves the transcript on this Mac. Answers and recaps need Claude.` : 'Then start it from the menu bar when a call begins.';
+    $('dc-mode-hint').textContent = 'Clean up tidies it as shown. Verbatim types every word.';
   };
   document.querySelectorAll('.seg[data-k]').forEach(g => g.querySelectorAll('button').forEach(b => b.onclick = () => {
     prefs[g.dataset.k] = b.dataset.v; paintPrefs(); post({ do: 'set', k: g.dataset.k, v: b.dataset.v });
@@ -665,44 +586,22 @@
   $('list').innerHTML = rows(P, 'p-');
   // Not everyone has a Claude plan: "Change provider" offers the same clients as Settings → Intelligence.
   $('p-claude').querySelector('.txt').insertAdjacentHTML('beforeend', '<button class="alt" id="client-alt">Change provider</button>');
-  const NAMES = { claude: 'Claude Plan', devin: 'Devin', pi: 'Pi', server: 'Custom Server' };
-  let want = null, provider = 'claude', saved = { apiBase: '', apiModel: '' }, pick = 'claude', probeTimer = 0;
-  const srvOK = () => /^https?:\/\/\S+$/.test($('srv-base').value.trim()) && !!$('srv-model').value.trim();
+  const NAMES = { local: 'Local Model', claude: 'Claude Plan' };
+  let want = null, provider = 'local', pick = 'local';
   const paintProv = () => {
     document.querySelectorAll('.opt').forEach(o => o.setAttribute('aria-checked', String(o.dataset.p === pick)));
-    $('srv').hidden = pick !== 'server';
-    document.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c.dataset.base === $('srv-base').value.trim()));
-    $('prov-use').textContent = 'Use ' + { claude: 'Claude', devin: 'Devin', pi: 'Pi', server: 'This Server' }[pick];
-    $('prov-use').disabled = pick === 'server' && !srvOK();
-  };
-  const probe = () => {   // ask the server for its models, so the Model box can offer them
-    clearTimeout(probeTimer);
-    const base = $('srv-base').value.trim();
-    $('srv-note').classList.remove('bad'); $('srv-note').textContent = '';
-    if (!/^https?:\/\/\S+$/.test(base)) return;
-    $('srv-note').textContent = 'Looking for models…';
-    probeTimer = setTimeout(() => post({ do: 'probe', base, key: $('srv-key').value.trim() }), 400);
+    $('prov-use').textContent = 'Use ' + { local: 'Local', claude: 'Claude' }[pick];
   };
   const closeProv = () => { $('prov').classList.remove('on'); setTimeout(() => { $('prov').hidden = true; }, 250); $('client-alt').focus(); };
   $('client-alt').onclick = () => {
-    pick = provider;
-    $('srv-base').value = saved.apiBase; $('srv-model').value = saved.apiModel; $('srv-key').value = '';
-    $('srv-key').placeholder = saved.apiBase ? 'Key (leave empty to keep the saved one)' : 'Key (not needed for local servers)';
-    $('srv-note').textContent = ''; paintProv();
+    pick = provider; paintProv();
     $('prov').hidden = false; requestAnimationFrame(() => $('prov').classList.add('on'));
     document.querySelector('.opt[aria-checked="true"]').focus();
-    if (pick === 'server') probe();
-    else if (!saved.apiBase) post({do:'localServers'});
   };
-  document.querySelectorAll('.opt').forEach(o => o.onclick = () => { pick = o.dataset.p; paintProv(); if (pick === 'server') { if ($('srv-base').value) probe(); else $('srv-base').focus(); } });
-  document.querySelectorAll('.chip').forEach(c => c.onclick = () => { $('srv-base').value = c.dataset.base; $('srv-model').value = ''; paintProv(); probe(); });
-  $('srv-base').oninput = () => { paintProv(); probe(); };
-  $('srv-key').oninput = () => probe();
-  $('srv-model').oninput = paintProv;
+  document.querySelectorAll('.opt').forEach(o => o.onclick = () => { pick = o.dataset.p; paintProv(); });
   $('prov-cancel').onclick = closeProv;
   $('prov').addEventListener('keydown', e => {
     if (e.key === 'Escape') { e.preventDefault(); closeProv(); }
-    if (e.key === 'Enter' && e.target.classList.contains('fld') && !$('prov-use').disabled) $('prov-use').click();
     if (e.key === 'Tab') {   // keep focus inside the sheet
       const f = [...$('prov').querySelectorAll('button, input')].filter(x => !x.disabled && x.offsetParent);
       if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
@@ -710,14 +609,7 @@
     }
   });
   $('prov-use').onclick = () => {
-    const m = { do: 'provider', client: ['devin', 'pi'].includes(pick) ? pick : 'claude' };
-    if (pick === 'claude') m.apiBase = '';
-    if (pick === 'server') {
-      m.apiBase = $('srv-base').value.trim(); m.apiModel = $('srv-model').value.trim();
-      if ($('srv-key').value.trim() || m.apiBase !== saved.apiBase) m.apiKey = $('srv-key').value.trim();   // empty key + same server keeps the saved key
-      saved = { apiBase: m.apiBase, apiModel: m.apiModel };
-    }
-    if (pick === 'claude') saved.apiBase = '';
+    const m = { do: 'provider', client: pick === 'local' ? 'local' : 'claude' };
     post(m); want = provider = pick;
     $('p-claude').classList.remove('ok'); planOK = false;
     $('p-claude').querySelector('.txt b').textContent = NAMES[pick];
@@ -738,7 +630,7 @@
   $('a-connectors').querySelector('.allow').textContent = 'Connect';
   let connected = false;
   $('enable').onclick = () => post({ do: 'enableAll', connected: String(connected) });
-  document.querySelector('[data-go="agents"]').addEventListener('click', () => { if (!['devin', 'pi'].includes(provider)) post({ do: 'connectors' }); });
+  document.querySelector('[data-go="agents"]').addEventListener('click', () => { if (provider !== 'local') post({ do: 'connectors' }); });
   document.querySelectorAll('.allow').forEach(b => b.onclick = () => {   // setup's two lists share ids: the click is the same grant
     const was = b.textContent; b.classList.add('wait'); b.textContent = 'Waiting';
     setTimeout(() => { b.classList.remove('wait'); b.textContent = was; }, 12000);   // gave up in System Settings
@@ -771,13 +663,13 @@
       { $('hint').textContent = 'That’s it. Atticus is on it.'; $('hint').classList.add('yes'); }
       $('try-skip').hidden = true; $('try-next').hidden = false;
     },
-    plan(c) {   // the AI client (Claude Code or Devin): installed, signed in, paid plan? The row says which, the button fixes it
+    plan(c) {   // the AI client: Local downloaded, or Claude Code installed, signed in, on a paid plan? The row says which, the button fixes it
       if (want && c.client !== want) return; want = null;
-      planOK = !!c.ok; provider = c.client || 'claude';
+      planOK = !!c.ok; provider = c.client || 'local';
       paintPrefs();
       $('p-claude').querySelector('.txt b').textContent = NAMES[provider] || NAMES.claude;
       $('p-claude').querySelector('.txt span').textContent = c.text;
-      $('p-claude').querySelector('.allow').textContent = { install: 'Install', login: 'Sign In', upgrade: 'Upgrade' }[c.need] || 'Allow';
+      $('p-claude').querySelector('.allow').textContent = { install: 'Install', login: 'Sign In', upgrade: 'Upgrade', download: 'Download' }[c.need] || 'Allow';
       if (last) ob.set(last);
     },
     walk(id) {   // Enable All: the step it is on says what to do there; the button waits until the walk ends
@@ -795,24 +687,6 @@
       $('a-connectors').querySelector('.txt span').textContent = n ? c.connected.slice(0, 2).join(', ') + (n > 2 ? ` and ${n - 2} more` : '') + ' connected' + (s ? ` · ${s} need sign-in` : '')
         : s ? `${s} need sign-in in Claude` : 'Gmail, Drive and more, from your Claude account.';
     },
-    models(list) {   // the custom server's models, from Change provider's probe
-      $('srv-models').replaceChildren(...list.map(m => Object.assign(document.createElement('option'), { value: m })));
-      if (list.length && !$('srv-model').value.trim()) $('srv-model').value = list[0];
-      $('srv-note').classList.toggle('bad', !list.length);
-      $('srv-note').textContent = list.length ? `Found ${list.length} model${list.length > 1 ? 's' : ''}. Screen tasks need one that can see images.` : 'No models found there. Is the server running? You can still type a model name.';
-      paintProv();
-    },
-    local(list) {
-      if (saved.apiBase || $('srv-base').value.trim() || !list[0]) return;
-      const found = list[0]; $('local-offer').hidden = false; $('local-running').textContent = `${found.name} is already running.`;
-      $('local-use').textContent = `Use ${found.name}`;
-      $('local-use').onclick = () => {
-        pick = 'server'; $('srv-base').value = found.base; $('srv-model').value = found.models[0] || '';
-        $('local-offer').hidden = true; paintProv();
-        $('srv-note').textContent = `Found ${found.models.length} model${found.models.length === 1 ? '' : 's'}. Screen tasks need one that can see images.`;
-      };
-    },
-    server(s) { saved = { apiBase: s.apiBase || '', apiModel: s.apiModel || '' }; },
     prefs(p) { document.querySelectorAll('.sw input').forEach(i => { if (document.activeElement !== i) i.checked = !!p[i.dataset.k]; }); prefs = p; paintPrefs(); },
     rec(m) { if (recording) /^Add/.test(m) || !m ? dcKeys('', m || 'Type Shortcut') : dcKeys(m); },   // held modifiers, live
     taken(kind, own) {
@@ -933,18 +807,11 @@
       const all = [...document.querySelectorAll('.idea:not([hidden])')];
       for (let k = 0; k < all.length && cur === 'done'; k++) { await wait(k ? 2200 : 1600); all.forEach((e, j) => e.classList.toggle('hi', j === k)); }
     },
-    async meeting() {
-      const q = $('mt-q'), ans = $('mt-ans'), think = $('mt-think'), dana = $('mt-dana');
-      q.classList.add('gone2'); ans.classList.remove('on'); think.hidden = false; dana.classList.remove('talk'); $('mt-clock').textContent = '12:04';
-      await wait(800); dana.classList.add('talk'); $('mt-clock').textContent = '12:05'; await wait(900);
-      dana.classList.remove('talk'); q.classList.remove('gone2'); await wait(1100); think.hidden = true; ans.classList.add('on'); await wait(2200); q.classList.add('gone2'); $('mt-archive').hidden=false; $('mt-save').textContent='Saved · Settings → Meetings'; await wait(2200);
-    },
   };
   const finals = { dictate() { dcShow(dcAt); },
                    work() { $('wk-line').textContent = WK_STARTED; $('wk-box').classList.remove('gone2'); $('wk-chip').classList.remove('gone2'); },
                    mac() { $('macstage').classList.add('snapped'); $('mac-play').classList.remove('gone2'); $('mac-box').classList.remove('gone2'); }, point() { $('ptstage').classList.add('wb'); wb(3); }, text() { $('tx-box').classList.remove('gone2'); $('tx-line').classList.add('sel'); },
-                   done() { document.querySelectorAll('.idea').forEach(e => e.classList.remove('hi')); },
-                   meeting() { $('mt-q').classList.remove('gone2'); $('mt-think').hidden = true; $('mt-ans').classList.add('on'); } };
+                   done() { document.querySelectorAll('.idea').forEach(e => e.classList.remove('hi')); } };
   for (const id of Object.keys(loops)) (async () => {
     for (;;) {
       try {

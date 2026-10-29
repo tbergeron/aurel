@@ -19,15 +19,17 @@ def native_fixture(body, real_mini=False):
     lease=source[source.index('    static func screenLease()'):source.index('    static func fingerprint',source.index('    static func screenLease()'))]
     defaults=source[source.index('    func defaultKey('):source.index('    func gone()',source.index('    func defaultKey('))]
     keys=source[source.index('var specs = [EventTypeSpec'):source.index('var ref: EventHotKeyRef?',source.index('var specs = [EventTypeSpec'))]
-    frames=source[source.index('    static func clamp(',source.index('enum MeetingFrame')):source.index('    static func key(',source.index('enum MeetingFrame'))]
+    frames=source[source.index('    static func clamp(',source.index('enum PanelFrame')):source.index('    static func key(',source.index('enum PanelFrame'))]
     mini=source[source.index('final class PassView'):source.index('\n}\n',source.index('final class MiniScreen'))+3]
     harness='''import Cocoa
 import Carbon
 import WebKit
+import SwiftUI
 import AVFoundation
 import EventKit
 let dir=CommandLine.arguments[1]
 var fixtureReduced=false
+func viewCheck(_ value:Any?,_ done:(Any?,Error?)->Void){done(value,nil)}   // the Agent view is native: its state is read, not evaluated
 var fixtureTelemetry:[[String]]=[]
 func telemetry(_ args:[String]){fixtureTelemetry.append(args)}
 enum Prefs {
@@ -43,12 +45,11 @@ final class MiniScreen {
  let clip=NSView();var forcePreview=false;var target:[String:Any]?,timer:Timer?,publish:(([String:Any])->Void)?
  func reset(){target=nil};func receive(_ value:[String:Any]){target=value};func stopCapture(clear:Bool){};func finish(){};func open(){};func layout(_ value:[String:Any]){}
 }
-enum MeetingFrame {
+enum PanelFrame {
  static func key(_ s:NSScreen)->String{"fixture"}
 ''' + frames + '''}
 ''' + source[source.index('func boxWidth('):source.index('final class App:')] + '''
 func axAttribute(_ e:AXUIElement,_ key:String)->CFTypeRef?{nil}
-func currentMeetingEvent(_ store:EKEventStore)->[String:Any]?{nil}
 let calendar=EKEventStore()
 final class MeetingStub {var running=false;func open(){};func acceptAgent(_ row:[String:Any]){};func showAgentPrep(_ row:[String:Any]){}}
 let meeting=MeetingStub()
@@ -164,7 +165,7 @@ Timer.scheduledTimer(withTimeInterval:0.05,repeats:true){_ in
  tries+=1;if tries>150{fail("Flight fixture timed out at stage \\(stage)")}
  switch stage{
  case 0:
-  guard tries>10,agentsUI.ready.contains("shelf") else{return}
+  guard tries>10,agentsUI.shelf != nil else{return}
   for bounds in [NSRect(x:0,y:0,width:1512,height:945),NSRect(x:-1920,y:0,width:1920,height:1055)]{
    for saved in [nil,[9000.0,-9000.0],[Double.nan,0]] as [[Double]?]{let f=AgentPanels.shelfFrame(NSRect(x:9000,y:9000,width:260,height:0),bounds,saved);guard bounds.contains(f),f.height==52 else{fail("Two-display saved geometry escaped its display")}}
   }
@@ -176,7 +177,7 @@ Timer.scheduledTimer(withTimeInterval:0.05,repeats:true){_ in
  case 1:
   // One transient panel; the orb swims a curved path on Core Animation (nothing per frame in the app), then the panel goes.
   guard let panel=agentsUI.flight,panel.isVisible else{   // it starts once the page answers agents.slot
-   if Date().timeIntervalSince(at)>3{stage=9;agentsUI.shelfWeb?.evaluateJavaScript("JSON.stringify([document.querySelectorAll('.chip.waiting').length,agents.slot('\\(id)')])"){v,e in fail("No orb flight (waiting chips, slot: \\(v ?? e ?? "nil"); launches queued \\(agentsUI.flying.count), quiet \\(agentsUI.quiet))")}};return}
+   if Date().timeIntervalSince(at)>3{stage=9;fail("No orb flight (waiting chips \\(agentsUI.shelfModel.arriving.count), slot: \\(String(describing:agentsUI.shelfModel.slot(id))); launches queued \\(agentsUI.flying.count), quiet \\(agentsUI.quiet))")};return}
   guard !panel.canBecomeKey,panel.ignoresMouseEvents else{fail("Flight took input")}
   let groups=(panel.contentView?.layer?.sublayers ?? []).compactMap{$0.animation(forKey:"swim") as? CAAnimationGroup}
   guard groups.count==6,let swim=groups.last?.animations?.first as? CAKeyframeAnimation,swim.path != nil,abs(groups.last!.duration-0.62)<0.01 else{fail("Orb does not swim a curved path")}
@@ -184,7 +185,7 @@ Timer.scheduledTimer(withTimeInterval:0.05,repeats:true){_ in
  case 2:
   guard Date().timeIntervalSince(at)>0.95 else{return}
   guard flight?.isVisible==false,agentsUI.flight==nil else{fail("Flight panel stayed on screen")}
-  agentsUI.shelfWeb?.evaluateJavaScript("document.querySelector('.chip.waiting')===null&&document.querySelectorAll('.chip').length===1"){v,_ in guard v as? Bool==true else{fail("The chip did not land")}}
+  guard agentsUI.shelfModel.arriving.isEmpty,agentsUI.shelfModel.split(agentsUI.shelfModel.list).shown.count==1 else{fail("The chip did not land")}
   fixtureReduced=true;stage=3;at=Date();agentsUI.fly(id,from:[10,10,30,30])
  case 3:
   guard agentsUI.flight==nil else{fail("Reduce Motion still swam")}
@@ -283,7 +284,7 @@ var row:[String:Any]=["id":id,"title":"Prepare report","brief":"Read the supplie
 let original=NSWorkspace.shared.frontmostApplication?.processIdentifier
 var stage=0,tries=0,nearAt=Date.distantPast
 func fail(_ text:String)->Never{print(text);agentsUI.process?.terminate();exit(1)}
-func evaluate(_ script:String,_ done:@escaping(Any?)->Void){agentsUI.shelfWeb?.evaluateJavaScript(script){value,error in if let error{fail(error.localizedDescription)};done(value)}}
+func evaluate(_ value:Any?,_ done:(Any?)->Void){done(value)}   // the shelf is native: its state is read, not evaluated
 agentsUI.receive(["event":"state","agent":row])
 agentsUI.ensureShelf(preload:true)
 let startAt=Date();agentsUI.accept(id)
@@ -293,14 +294,14 @@ Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){_ in
  tries+=1;if tries>150{fail("Agent native test timed out at stage \\(stage)")}
  switch stage {
  case 0:
-  guard agentsUI.ready.contains("shelf"),let shelf=agentsUI.shelf,shelf.isVisible else{return}
+  guard let shelf=agentsUI.shelf,shelf.isVisible else{return}
   guard !shelf.canBecomeKey,!shelf.isKeyWindow else{fail("Shelf took keyboard focus")}
-  evaluate("document.querySelector('.chip .title').textContent"){value in
+  evaluate(agentsUI.shelfModel.split(agentsUI.shelfModel.list).shown.first?.title){value in
    guard value as? String=="Prepare report" else{fail("Shelf chip missing")}
-   stage=1;evaluate("document.querySelector('.chip').click()"){_ in}
+   stage=1;agentsUI.shelfModel.click(id)
   }
  case 1:
-  evaluate("document.querySelector('.chip').classList.contains('expanded')"){value in
+  evaluate(agentsUI.shelfModel.expanded==id){value in
    guard value as? Bool==true else{return};stage=2
    let shelf=agentsUI.shelf!,screen=shelf.screen!,display=screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as! CGDirectDisplayID
    let b=CGDisplayBounds(display);CGWarpMouseCursorPosition(CGPoint(x:shelf.frame.minX-20,y:b.maxY-shelf.frame.midY));nearAt=Date()
@@ -313,7 +314,7 @@ Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){_ in
  case 3:
   app.busy=false;stage=4
  case 4:
-  evaluate("agents.expanded()"){value in guard value as? String==id,stage==4 else{return};stage=40}
+  evaluate(agentsUI.shelfModel.expanded){value in guard value as? String==id,stage==4 else{return};stage=40}
  case 40:
   guard !app.calls.contains("agentDone"),!app.panel.isVisible else{fail("A finish popped up the box")}   // its own chip opens instead
   guard !app.panel.isKeyWindow,NSWorkspace.shared.frontmostApplication?.processIdentifier==original else{fail("Done ping took focus")}
@@ -322,8 +323,9 @@ Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){_ in
   row["sources"]=[["title":"Research source","url":"https://fixture.example/source","domain":"fixture.example"]]
   agentsUI.receive(["event":"state","agent":row]);agentsUI.openView(id)
  case 5:
-  guard agentsUI.ready.contains("view") else{return};stage=6
-  agentsUI.viewWeb?.evaluateJavaScript("document.querySelector('.now .current')?.textContent==='Reading source material' && document.querySelector('#timeline .entry')?.textContent.includes('WebFetch') && document.querySelector('.now .source')?.textContent.includes('Research source') && !document.querySelector('#body .mini')"){value,error in
+  guard agentsUI.view?.isVisible==true else{return};stage=6
+  let shown=agentsUI.model.current
+  viewCheck(shown?.id==id && shown?.state=="Reading source material" && shown?.groups.first?.tools.contains("WebFetch")==true && shown?.sources.contains{($0["title"] as? String)=="Research source"}==true && shown?.r["target"]==nil){value,error in
    guard error==nil,value as? Bool==true else{fail("Non-window Agent view lost its live step, source or timeline")}
   DispatchQueue.global().async{
    do{
@@ -350,37 +352,36 @@ let id="11111111111111111111111111111111"
 let row:[String:Any]=["id":id,"title":"Cheapest e-bikes","brief":"Find the five cheapest e-bikes.","status":"running","step":"Reading amazon.com","created":Date().timeIntervalSince1970-40,"started":Date().timeIntervalSince1970-40,"steps":["Searching the web"],"timeline":[["tool":"WebSearch","text":"Searching the web"]],"sources":[["title":"Amazon","url":"https://www.amazon.com/s?k=e-bike","domain":"www.amazon.com"]],"target":["pid":123,"windowID":"77","windowFrame":[10.0,20.0,600.0,400.0],"window":"Deals","app":"Browser Fixture"] as [String:Any]]
 var stage=0,tries=0,clicked=Date.distantFuture
 func fail(_ text:String)->Never{print(text);agentsUI.process?.terminate();exit(1)}
+func evaluateShelf(_ value:Any?,_ done:(Any?)->Void){done(value)}
 func click(_ p:CGPoint){for type in [CGEventType.mouseMoved,.leftMouseDown,.leftMouseUp]{let e=CGEvent(mouseEventSource:CGEventSource(stateID:.privateState),mouseType:type,mouseCursorPosition:p,mouseButton:.left);e?.flags=[];e?.setIntegerValueField(.mouseEventClickState,value:1);e?.post(tap:.cghidEventTap);usleep(type == .mouseMoved ? 900_000 : 100_000)}}
 func clickHead(_ then:@escaping()->Void){   // measured each time: the first click resizes the shelf
- agentsUI.shelfWeb?.evaluateJavaScript("(r=>[r.x,r.y,r.width,r.height])(document.querySelector('.chip .head').getBoundingClientRect())"){value,_ in
-  guard let r=value as? [Double],r.count==4,let f=agentsUI.shelf?.frame else{fail("Chip missing")}
-  let top=NSScreen.screens[0].frame.maxY,point=CGPoint(x:f.minX+r[0]+r[2]/2,y:top-(f.maxY-r[1]-r[3]/2))
-  DispatchQueue.global().async{click(point);DispatchQueue.main.async(execute:then)}
- }
+ guard let c=agentsUI.shelfModel.frames[id],let f=agentsUI.shelf?.frame else{fail("Chip missing")}   // panel points from the top left
+ let top=NSScreen.screens[0].frame.maxY,point=CGPoint(x:f.minX+c.midX,y:top-(f.maxY-c.minY-22))   // the middle of the chip's 44 pt head
+ DispatchQueue.global().async{click(point);DispatchQueue.main.async(execute:then)}
 }
 agentsUI.receive(["event":"state","agent":row])
 Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){_ in
  tries+=1;if tries>200{fail("Real click test timed out at stage \\(stage)")}
  switch stage {
  case 0:
-  guard agentsUI.ready.contains("shelf"),agentsUI.shelf?.isVisible==true else{return};stage=1
+  guard agentsUI.shelf?.isVisible==true,agentsUI.shelfModel.frames[id] != nil else{return};stage=1
   clickHead{clicked=Date();stage=2}
  case 2:
-  agentsUI.shelfWeb?.evaluateJavaScript("agents.expanded()"){value,_ in
+  evaluateShelf(agentsUI.shelfModel.expanded){value in
    guard stage==2 else{return}
    guard value as? String==id else{if Date().timeIntervalSince(clicked)>6{fail("The first click did not open the chip in place")};return}
    guard agentsUI.view?.isVisible != true else{fail("The first click opened the Agent view instead of the chip")}
    stage=3;clickHead{clicked=Date();stage=4}
   }
  case 4:
-  guard let view=agentsUI.view,view.isVisible,agentsUI.ready.contains("view") else{if Date().timeIntervalSince(clicked)>6{fail("Clicking the chip did not open the Agent view")};return}   // 6 s from the click, not from launch: the shelf's own first load can take most of that on a guest
+  guard let view=agentsUI.view,view.isVisible else{if Date().timeIntervalSince(clicked)>6{fail("Clicking the chip did not open the Agent view")};return}   // 6 s from the click, not from launch: the shelf's own first load can take most of that on a guest
   let windows=CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],kCGNullWindowID) as? [[String:Any]] ?? []
   let front=windows.first{($0[kCGWindowLayer as String] as? Int)==0}?[kCGWindowNumber as String] as? Int
   guard front==view.windowNumber else{fail("Agent view opened behind other windows")}
   stage = -100
-  agentsUI.viewWeb?.evaluateJavaScript("document.querySelector('.item.selected')?.dataset.id"){value,_ in
+  viewCheck(agentsUI.model.current?.id){value,_ in
    guard value as? String==id else{fail("Agent view did not focus the clicked agent")}
-   agentsUI.shelfWeb?.evaluateJavaScript("!!document.querySelector('.chip[data-id=\\"\\(id)\\"]')"){value,_ in
+   evaluateShelf(agentsUI.shelfModel.split(agentsUI.shelfModel.list).shown.contains{$0.id==id}){value in
     guard value as? Bool==true,agentsUI.shelf?.isVisible==true else{fail("The chip left the shelf after a click")}
     agentsUI.view?.performClose(nil)
     DispatchQueue.main.asyncAfter(deadline:.now()+0.8){
@@ -395,7 +396,7 @@ Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){_ in
 nsapp.run()''','real click and close checks ok')
 
     def test_click_expand_is_smooth_and_resizes_once_per_change(self):
-        # Clicks across chips and off the shelf (Esc/click elsewhere): frames are timed in WebKit, native panel resizes are counted.
+        # Clicks across chips and off the shelf (Esc/click elsewhere): each opens its chip, and the panel resizes once per change.
         run_fixture(self,'''let nsapp=NSApplication.shared;nsapp.setActivationPolicy(.accessory)
 let agentsUI=AgentPanels()
 let now=Date().timeIntervalSince1970
@@ -412,35 +413,26 @@ NotificationCenter.default.addObserver(forName:NSWindow.didResizeNotification,ob
 func fail(_ text:String)->Never{print(text);fflush(stdout);agentsUI.process?.terminate();exit(1)}
 Timer.scheduledTimer(withTimeInterval:0.1,repeats:true){_ in
  tries+=1;if tries>200{fail("Frame fixture timed out at stage \\(stage)")}
- guard stage==0,tries>25,agentsUI.ready.contains("shelf"),agentsUI.shelf?.isVisible==true else{return}
+ guard stage==0,tries>25,agentsUI.shelf?.isVisible==true else{return}
  stage=1   // 2 working: both show
- agentsUI.shelfWeb?.evaluateJavaScript("document.querySelectorAll('.chip .head').length"){v,_ in
-  guard v as? Int==2 else{fail("Chips missing")}
-  agentsUI.shelfWeb?.evaluateJavaScript("window.__f=[];window.__x=new Set();let last=performance.now();(function tick(t){__f.push(t-last);last=t;const e=document.querySelector('.chip.expanded');if(e)__x.add(e.dataset.id);requestAnimationFrame(tick)})(last)")
-  resizes=0
-  // Each click opens that chip at once (read live: chips move as others open); -1 is Esc or a click off the shelf.
-  func finish(){
-   do{
-    agentsUI.shelfWeb?.evaluateJavaScript("JSON.stringify(__f.slice(5))"){v,_ in
-     let frames=((try? JSONSerialization.jsonObject(with:Data((v as? String ?? "[]").utf8))) as? [Double] ?? []).sorted()
-     guard frames.count>60 else{fail("Too few frames: \\(frames.count)")}
-     let median=frames[frames.count/2],p95=frames[Int(Double(frames.count)*0.95)],long=frames.filter{$0>25}.count
-     print(String(format:"frames %d, median %.1f ms, p95 %.1f ms, over 25 ms %d (%.1f%%), panel resizes %d for 6 click changes",frames.count,median,p95,long,Double(long)*100/Double(frames.count),resizes))
-     guard resizes<=6 else{fail("Panel resized per frame: \\(resizes)")}
-     guard median<=20,Double(long)/Double(frames.count)<0.1 else{fail("Click motion is not smooth")}
-     agentsUI.shelfWeb?.evaluateJavaScript("__x.size"){v,_ in
-      print("chips expanded by click: \\(v ?? 0)");do{guard (v as? Int ?? 0)>=2 else{fail("Clicks did not expand the chips")}
-      agentsUI.process?.terminate();print("frame checks ok");exit(0)}}
-    }
-   }
-  }
-  let plan=[0,1,0,-1,1,-1]
-  func step(_ i:Int){
-   guard i<plan.count else{finish();return}
-   if plan[i]<0{agentsUI.js("shelf","blur");DispatchQueue.main.asyncAfter(deadline:.now()+0.8){step(i+1)};return}
-   agentsUI.shelfWeb?.evaluateJavaScript("document.querySelectorAll('.chip .head')[\\(plan[i])].click()"){_,_ in DispatchQueue.main.asyncAfter(deadline:.now()+0.8){step(i+1)}}
-  }
-  step(0)
+ let s=agentsUI.shelfModel,ids=s.split(s.list).shown.map{$0.id}
+ guard ids.count==2 else{fail("Chips missing")}
+ resizes=0
+ var opened=Set<String>()
+ // Each click opens that chip at once (read live: chips move as others open); -1 is Esc or a click off the shelf.
+ func finish(){
+  print("panel resizes \\(resizes) for 6 click changes, chips expanded by click: \\(opened.count)")
+  guard resizes<=6 else{fail("Panel resized more than once per change: \\(resizes)")}
+  guard opened.count>=2 else{fail("Clicks did not expand the chips")}
+  agentsUI.process?.terminate();print("frame checks ok");exit(0)
  }
+ let plan=[0,1,0,-1,1,-1]
+ func step(_ i:Int){
+  if !s.expanded.isEmpty{opened.insert(s.expanded)}
+  guard i<plan.count else{finish();return}
+  if plan[i]<0{agentsUI.js("shelf","blur")}else{s.click(ids[plan[i]])}
+  DispatchQueue.main.asyncAfter(deadline:.now()+0.8){step(i+1)}
+ }
+ step(0)
 }
 nsapp.run()''','frame checks ok')

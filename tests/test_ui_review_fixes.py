@@ -35,8 +35,6 @@ class UIReviewFixTests(unittest.TestCase):
         self.box = (ROOT / 'ui/ui.html').read_text()
         self.settings = (ROOT / 'ui/settings.html').read_text()
         self.onboarding = (ROOT / 'ui/onboarding.html').read_text()
-        self.agents = (ROOT / 'ui/agents.html').read_text()
-        self.meeting = (ROOT / 'ui/meeting.html').read_text()
 
     def test_native_clicks_reach_try_again_the_agents_pill_and_pill_buttons(self):
         tap = self.box[self.box.index('    tap([x, y])'):self.box.index('    size(h)')]
@@ -137,12 +135,10 @@ if (away.frames || away.timers || !away.waiting) process.exit(3);
         self.assertGreaterEqual(contrast(var(light, 'ok-text'), tint('#34c759', .13)), 4.5)
         self.assertGreaterEqual(contrast(var(light, 'warn'), tint('#ff9f0a', .14)), 4.5)
         self.assertNotRegex(self.settings, r'\{[^}]*\bcolor: #ff(9f0a|453a)')   # text uses the tokens; fills may keep the bright colours
-        self.assertGreaterEqual(contrast(re.search(r'--fg3:(#[0-9a-f]{6})', self.agents).group(1), '#1e1e22'), 4.5)
         setup_light = re.search(r':root \{(.*?)\}', self.onboarding, re.S).group(1)
         setup_dark = re.search(r'prefers-color-scheme: dark\) \{ :root \{(.*?)\}', self.onboarding, re.S).group(1)
         self.assertGreaterEqual(contrast(var(setup_light, 'fg3'), '#fbfbfd'), 4.5)
         self.assertGreaterEqual(contrast(var(setup_dark, 'fg3'), '#2a2a2c'), 4.5)
-        self.assertGreaterEqual(contrast(re.search(r'--fg3:(#[0-9a-f]{6})', self.meeting).group(1), '#1e1e20'), 4.5)
 
     def test_settings_exposes_the_current_page_and_app_list_choice(self):
         self.assertIn('class="on" aria-current="page"', self.settings)
@@ -150,19 +146,9 @@ if (away.frames || away.timers || !away.waiting) process.exit(3);
         self.assertIn('id="appview" role="group" aria-label="App list"', self.settings)
         self.assertIn("b.setAttribute('aria-pressed', on)", self.settings)
 
-    def test_meetings_row_offers_turn_on_instead_of_dead_buttons(self):
-        self.assertIn("$('meetingDemo').hidden = $('meetingPrepOpen').hidden = !P.meeting; $('meetingOn').hidden = !!P.meeting;", self.settings)
-        self.assertIn("$('meetingOn').onclick = () => set('meeting', true);", self.settings)
-
     def test_onboarding_recorder_names_a_lone_modifier(self):
         self.assertIn('a modifier on its own', self.onboarding)
         self.assertNotIn('Use modifiers with a key', self.onboarding)
-
-    def test_turned_off_tips_come_back_from_the_menu_bar(self):
-        menu = self.swift[self.swift.index('final class MenuBar'):self.swift.index('// Settings window (ui/settings.html)')]
-        self.assertIn('if !Prefs.bool("tips") { add(help, "Show Tips Again", #selector(tipsOn), "", "lightbulb") }', menu)
-        self.assertIn('add(m, "Help & Feedback", nil, "", "questionmark.circle").submenu = help', menu)
-        self.assertIn('@objc func tipsOn() { settings.apply("tips", true); settings.push() }', menu)
 
     def test_removed_sonnet_offer_leaves_no_card_branch(self):
         self.assertNotIn('Sonnet', self.box[self.box.index('    respond(text)'):self.box.index('    improve()')])
@@ -171,24 +157,16 @@ if (away.frames || away.timers || !away.waiting) process.exit(3);
 
     def test_agent_cost_reads_like_usage(self):
         script = ''
-        for page in (self.box, self.agents):
+        for page in (self.box,):   # the Agent view's AgentRow.cost has the same checks in Atticus --selftest
             line = re.search(r'const apiCost=.*?;', page).group(0)
             script += '{' + line + r'''
 if (apiCost(.0412) !== '≈4.12¢ at API prices' || apiCost(.1861) !== '≈18.6¢ at API prices' || apiCost(2.5) !== '≈$2.50 at API prices') process.exit(1); }
 '''
         node(self, script)
-        self.assertNotIn('Plan usage', self.box + self.agents)
+        self.assertNotIn('Plan usage', self.box + self.swift)
 
     def test_box_card_screenshots_define_the_agents_panel(self):
         self.assertTrue((ROOT / 'tests/shoot_agents_design.py').read_text().split("CARDS = r'''", 1)[1].startswith('let agentsUI=AgentPanels()\n'))
-
-    def test_usage_history_shows_a_readable_date(self):
-        self.assertNotIn('a.at.slice(5, 16)', self.settings)
-        self.assertIn("new Date(a.at.replace(' ', 'T')).toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'})", self.settings)
-
-    def test_usage_splits_asks_from_agents_in_unambiguous_dollars(self):
-        self.assertIn("const money = u => '$' + u.toFixed(u < .01 ? 4 : 2);", self.settings)
-        self.assertIn('${u.asks} asks ${money(u.askUsd ?? u.usd)} · ${u.agentCalls || 0} agent calls ${money(u.agentUsd || 0)}', self.settings)
 
     def test_a_new_ask_drops_a_paused_card_left_by_resuming_elsewhere(self):
         listen = self.box[self.box.index('    listen(mode)'):self.box.index('    level(v)')]
@@ -252,12 +230,9 @@ if (classes.has('held') || card.style.minHeight || fitted !== 2) process.exit(2)
         mouse_up = self.swift[self.swift.index('            default:', self.swift.index('var sizing:')):self.swift.index('            return nil', self.swift.index('            default:', self.swift.index('var sizing:')))]
         self.assertIn('js("resizeDone")', mouse_up)
 
-    def test_settings_disabled_segment_looks_off_and_usage_cards_fill_rows(self):
-        self.assertIn("[data-k=dictateMode] [data-v=cleanup]').disabled = other", self.settings)
+    def test_settings_disabled_segment_looks_off(self):
         self.assertIn('.seg button:disabled { opacity: .4; pointer-events: none; }', self.settings)
         self.assertIn('.seg button:disabled { opacity: .4; pointer-events: none; }', self.onboarding)
-        self.assertIn('grid-template-columns: repeat(6, 1fr)', self.settings)
-        self.assertIn('.stat { grid-column: span 2; } .stat:nth-child(n+4) { grid-column: span 3; }', self.settings)
 
     def test_small_leftovers(self):
         self.assertIn("moveFailed(){status('Could not move');", self.box)   # a failure, not live work

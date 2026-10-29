@@ -10,8 +10,8 @@ from tests.test_agents_native import run_fixture
 
 PREFS = {'hotkeyLabel': '⌃⌥Space', 'login': True, 'paused': False, 'volume': .16, 'client': 'claude', 'model': 'haiku',
          'routing': 'balanced', 'microphone': 'automatic', 'agentModel': 'sonnet', 'agentUserTools': True, 'screen': 'auto',
-         'speak': False, 'hideWhenSharing': True, 'menuIcon': True, 'autoUpdate': True, 'safe': True, 'meeting': False,
-         'meetingSave': True, 'learnMe': True, 'stats': True, 'tips': True, 'draw': True, 'dictateMode': 'verbatim',
+         'speak': False, 'hideWhenSharing': True, 'menuIcon': True, 'autoUpdate': True, 'safe': True,
+         'learnMe': True, 'stats': True, 'tips': True, 'draw': True, 'dictateMode': 'verbatim',
          'dictateHotkeyLabel': '', 'dictateHistory': True, 'input': 'voice', 'talkMode': 'hold', 'speechModel': 'speech',
          'improve': False}
 STATE = {'today': {'asks': 3, 'usd': .004, 'secs': 3}, 'week': {'asks': 21, 'usd': .03, 'secs': 3.4}, 'all': {'asks': 140, 'usd': .2, 'secs': 3.8},
@@ -22,7 +22,6 @@ ROUTINES = [{'id': 'r1', 'kind': 'time', 'at': '08:00', 'days': 'weekdays', 'ask
 DICTATION = {'words': ['Atticus', 'PostHog'], 'stats': {'today': 412, 'words': 18250, 'minutes': 96, 'sessions': 320},
              'history': [{'id': 'd1', 'timestamp': 1792425600, 'app': 'Notes', 'text': 'Pick up the desk lamp after school.'},
                          {'id': 'd2', 'timestamp': 1792422000, 'app': 'Messages', 'text': 'On my way, see you in ten.'}]}
-MEETINGS = {'meetings': [{'id': 'm1', 'title': 'Design review', 'started': 1792425600, 'duration': 1860, 'app': 'Zoom', 'summary': 'Settings get their colors back.', 'status': 'Saved'}]}
 TILE = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Crect width='30' height='30' rx='7' fill='%23COLOR'/%3E%3C/svg%3E"
 APPS = [{'id': n, 'name': n, 'icon': TILE.replace('COLOR', c), 'suggested': True, 'status': st} for n, c, st in
         [('Notes', 'ffcc00', 'allowed'), ('Mail', '0a84ff', 'new'), ('Music', 'ff375f', 'blocked'), ('Calendar', 'ff453a', 'new')]]
@@ -40,16 +39,13 @@ SCENES = [
     ('settings-intelligence-server', "load({apiBase:'http://localhost:11434',apiModel:'qwen3'});st.tab('brain');up();st.models({base:'http://localhost:11434',key:'',list:['qwen3','llama3.2']})"),
     ('settings-memory', "load({});st.tab('memory');up();document.querySelector('.profile-category').open=true"),
     ('settings-memory-end', "document.querySelector('main').scrollTop=1e5"),
-    ('settings-meetings', "st.tab('meetings');up();st.meetings(MEETINGS_JSON)"),
-    ('settings-usage', "st.tab('usage');up()"),
     ('settings-account', "st.tab('account');up()"),
     ('settings-account-end', "document.querySelector('main').scrollTop=1e5"),
     ('settings-apps', "st.tab('apps');st.apps(APPS_JSON)"),
     ('settings-about', "st.tab('about');up()"),
-    ('settings-feedback', "st.tab('feedback');up()"),
 ]
-SCENES = [(n, js.replace('MEETINGS_JSON', json.dumps(MEETINGS)).replace('APPS_JSON', json.dumps(APPS))) for n, js in SCENES]
-SETUP_PAGES = ['try', 'mac', 'text', 'dictate', 'point', 'work', 'meeting']   # setup's feature pages, in order
+SCENES = [(n, js.replace('APPS_JSON', json.dumps(APPS))) for n, js in SCENES]
+SETUP_PAGES = ['try', 'mac', 'text', 'dictate', 'point', 'work']   # setup's feature pages, in order
 
 # By window ID: a stray system prompt in the VM cannot cover the shot.
 SNAP = r'''func snap(_ name:String,_ w:NSWindow){w.sharingType = .readOnly;let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/sbin/screencapture");p.arguments=["-x","-o","-l\(w.windowNumber)",out+"/"+name+".png"];try! p.run();p.waitUntilExit();print("shot \(name)")}
@@ -71,7 +67,7 @@ func settingsScene(_ i:Int,_ look:Int){
 let (ow,ov)=page("onboarding.html",NSSize(width:640,height:640),"ob");ow.orderOut(nil)
 func onboardingScene(_ look:Int){
  let name=looks[look].0;ow.orderFrontRegardless()
- ov.evaluateJavaScript("ob.prefs({draw:true,meeting:false,routing:'balanced',dictateMode:'verbatim',dictateHotkeyLabel:''});ob.plan({ok:true,client:'claude',text:'Signed in. Claude Max.'});ob.set({mic:true,speech:true,ax:true,screen:false,auto:true});document.querySelector('[data-go=\"perms\"]').click()"){_,_ in
+ ov.evaluateJavaScript("ob.prefs({draw:true,routing:'balanced',dictateMode:'verbatim',dictateHotkeyLabel:''});ob.plan({ok:true,client:'claude',text:'Signed in. Claude Max.'});ob.set({mic:true,speech:true,ax:true,screen:false,auto:true});document.querySelector('[data-go=\"perms\"]').click()"){_,_ in
   after(1.4){snap("setup-perms-"+name,ow)
    ov.evaluateJavaScript("document.getElementById('client-alt').click();document.querySelector('.opt[data-p=\"server\"]').click();ob.models(['qwen3','llama3.2'])"){_,_ in
     after(0.9){snap("setup-provider-"+name,ow)

@@ -56,6 +56,7 @@ if not os.environ.get('ATTICUS_VM') and not os.environ.get('ATTICUS_ALLOW_HOST_U
 # the relay polls time.sleep until the folder goes, so a later test's fake clock or sleep mock counted its naps.
 import shutil
 import atticus
+atticus.CLIENT_DEFAULT = 'claude'   # most tests drive the Claude client; tests/test_local.py covers Local, the app's default
 _main = atticus.main
 
 

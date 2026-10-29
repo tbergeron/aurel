@@ -13,7 +13,6 @@ ROOT = Path(__file__).resolve().parents[1]
 class SwiftReviewFixTests(unittest.TestCase):
     def setUp(self):
         self.swift = (ROOT / "Atticus.swift").read_text()
-        self.agents = (ROOT / "ui/agents.html").read_text()
         self.overlay = (ROOT / "ui/ui.html").read_text()
         self.settings = (ROOT / "ui/settings.html").read_text()
 
@@ -93,10 +92,11 @@ print("long step stays reachable")
         self.assertIn("long step stays reachable", run_swift(self, harness))
 
     def test_agent_rename_cancel_feedback_and_delete_confirmation(self):
-        rename = self.agents[self.agents.index("const saved="):self.agents.index(" const head=", self.agents.index("const saved="))]
-        self.assertIn("e.stopPropagation()", rename)
-        self.assertIn("deleting===r.name", rename)
-        self.assertIn("namedReply", self.agents)
+        saved = self.swift[self.swift.index('    @ViewBuilder func savedRow('):self.swift.index('struct AgentDetail')]
+        self.assertIn('.onExitCommand { renaming = "" }', saved)   # Esc cancels the rename
+        self.assertIn('m.say("Name unchanged.")', saved)
+        self.assertIn('.confirmationDialog("Delete', saved)   # delete asks first
+        self.assertIn('case "namedReply": say(', self.swift)
         named = self.swift[self.swift.index('        } else if kind == "named"'):self.swift.index("        if let row =", self.swift.index('        } else if kind == "named"'))]
         self.assertIn('js("view","namedReply"', named)
 
@@ -236,14 +236,13 @@ print("hidden rewrite target kept")
         self.assertIn('app.sound("Hero"', expand)
         self.assertNotIn("app.", expand.replace('app.sound("Hero"', ''))   # the box is never shown, pinned or framed
         self.assertNotIn('"seen"', expand)   # seen only when the user opens or hides it
-        ready = panels[panels.index('        case "ready":'):panels.index('        case "size":')]
-        self.assertIn('if !expandOnReady.isEmpty { js(surface,"expand",expandOnReady); expandOnReady = "" }', ready)   # a shelf page still loading
+        self.assertIn('js("shelf","expand",id)', panels)   # the native shelf is there at once: no page to wait for
         tick = panels[panels.index("    func tick()"):panels.index("    func open(_ id")]
         self.assertNotIn("show(", tick)
         for gone in ["pending", "doneFrame", "cardBesideShelf", "byShelf", "lastKey"]:
             self.assertNotIn(gone, panels)
         self.assertNotIn("cardBesideShelf", self.swift)
-        self.assertIn("expand(id){", self.agents)
+        self.assertIn('case "expand":', self.swift)
 
     def test_agent_handoff_drops_the_foreground_mini_screen_before_fading(self):
         panels = self.swift[self.swift.index("final class AgentPanels"):self.swift.index("final class RoutineWake")]
@@ -341,7 +340,7 @@ print("wake waits for active session")
         self.assertIn('js("dictated", ["text": message, "ok": false])', screen)
         panels = self.swift[self.swift.index("final class AgentPanels"):self.swift.index("    func js(_ surface:", self.swift.index("final class AgentPanels"))]
         self.assertIn("NSApplication.didChangeScreenParametersNotification", panels)
-        self.assertGreaterEqual(panels.count("MeetingFrame.clamp"), 2)
+        self.assertGreaterEqual(panels.count("PanelFrame.clamp"), 2)
 
     def test_visible_box_follows_the_pointer_display_without_interrupting_interaction(self):
         follow = self.swift[self.swift.index("    func followPointerScreen()"):self.swift.index("    func pointElement(")]
@@ -361,17 +360,17 @@ print("wake waits for active session")
         self.assertIn("if !busy && !engine.isRunning { noteHidden() }", run)
 
     def test_shelf_follow_keeps_side_offsets(self):
-        geometry = self.swift[self.swift.index("enum MeetingFrame {"):self.swift.index("final class MeetingWebView")]
+        geometry = self.swift[self.swift.index("enum PanelFrame {"):self.swift.index("enum CalendarTool {")]
         harness = "import Cocoa\n" + geometry + r'''
 let a = NSRect(x: 0, y: 0, width: 1440, height: 875), b = NSRect(x: 1440, y: -200, width: 1920, height: 1055)
-func go(_ f: NSRect) -> NSRect { MeetingFrame.clamp(MeetingFrame.follow(f, a, b, right: f.midX > a.midX, top: f.midY > a.midY), b) }
+func go(_ f: NSRect) -> NSRect { PanelFrame.clamp(PanelFrame.follow(f, a, b, right: f.midX > a.midX, top: f.midY > a.midY), b) }
 let shelf = NSRect(x: a.maxX - 272, y: a.maxY - 160, width: 260, height: 152)   // default: 12 from the right, 8 from the top
 let moved = go(shelf)
 precondition(b.maxX - moved.maxX == 12 && b.maxY - moved.maxY == 8 && moved.size == shelf.size)
 let dragged = go(NSRect(x: 8, y: 8, width: 260, height: 52))   // dragged to the bottom-left
 precondition(dragged.minX - b.minX == 8 && dragged.minY - b.minY == 8)
 let small = NSRect(x: -800, y: 0, width: 800, height: 600)
-let clamped = MeetingFrame.clamp(MeetingFrame.follow(shelf, a, small, right: true, top: true), small)
+let clamped = PanelFrame.clamp(PanelFrame.follow(shelf, a, small, right: true, top: true), small)
 precondition(small.contains(clamped))
 print("shelf follows")
 '''
@@ -380,19 +379,18 @@ print("shelf follows")
     def test_shelf_follow_waits_for_drag_and_open_chip(self):
         panels = self.swift[self.swift.index("final class AgentPanels"):self.swift.index("final class RoutineWake")]
         follow = panels[panels.index("    func follow()"):panels.index("    // The agent's orb lifts off")]
-        for guard in ["drag == nil, flight == nil, !following", 'evaluateJavaScript("agents.expanded()")', "let f = pointerFollow(shelf.frame)"]:
+        for guard in ["drag == nil, flight == nil, shelfModel.expanded.isEmpty || !shelf.isVisible", "let f = pointerFollow(shelf.frame)"]:
             self.assertIn(guard, follow)
         tick = panels[panels.index("    func tick()"):panels.index("    func open(_ id")]
         self.assertIn("follow()", tick)
         self.assertIn("!(shelf.isVisible && shelf.screen == screen)", panels[panels.index("    func placeShelf("):])
-        self.assertIn("expanded:()=>expanded", self.agents)
 
     def test_finished_agents_fold_into_the_shelf_and_a_chip_click_opens_the_agent_view(self):
         panels = self.swift[self.swift.index("final class AgentPanels"):self.swift.index("final class RoutineWake")]
         dismiss = panels[panels.index("    func dismissPing("):panels.index("    func show(_ id:String")]
         self.assertIn('send(["action":"seen","id":id])', dismiss)   # Later/Open restart its 10 minutes
         self.assertNotIn('"leave"', dismiss); self.assertNotIn("dismissed.insert", dismiss)   # it folds, it does not leave the shelf
-        self.assertNotIn('"leave"', panels); self.assertNotIn("leaveAt", self.agents)
+        self.assertNotIn('"leave"', panels)
         self.assertIn("var hasChips: Bool { lingering ||", panels)   # the pill alone keeps the shelf up; quiet still hides it first
         self.assertIn('case "view", "show": openView(id); if rows[id]?["status"] as? String == "done" { send(["action":"seen","id":id]) }', panels)   # opened: seen, its 10 minutes restart
         self.assertIn('case "lingering": lingering = body["value"] as? Bool ?? false', panels)
@@ -400,7 +398,7 @@ print("shelf follows")
         self.assertIn("app.agentCard = id", show)   # talking or typing in the box then steers this agent (replyAgent)
         self.assertIn("ensureShelf(preload:true)", panels[panels.index('if kind == "list"'):panels.index('} else if kind == "named"')])   # after a restart
         self.assertIn('max(r["ended"] as? Double ?? 0, r["seenAt"] as? Double ?? 0) < 600', panels)
-        self.assertIn("LINGER=600", self.agents)   # the same 10 minutes on both sides
+        self.assertIn("static let width: CGFloat = 260, linger = 600.0", self.swift)   # the same 10 minutes on both sides
         typed = self.swift.split("    func typed(", 1)[1].split("    func finish()", 1)[0]
         self.assertIn("replyAgent = agentCard", typed)
 
@@ -427,9 +425,9 @@ print("shelf follows")
         self.assertIn("fade()", tick)   # the 0.3 s dwell still fades it
         self.assertNotIn("ignoresMouseEvents", tick)
         self.assertIn("override func mouseExited(with e: NSEvent) { here() }", self.swift)
-        hover = self.agents[self.agents.index("function hoverAt("):self.agents.index("const steered=")]
-        self.assertNotIn("setTimeout", hover); self.assertNotIn("setExpanded", hover)   # hover tints, a click opens (Oct 21: hover-open was laggy)
-        self.assertIn("expanded===r.id?command('view',r.id):setExpanded(r.id)", self.agents)
+        hover = self.swift[self.swift.index("    func pointer(_ p: [Double]) -> Bool {"):self.swift.index("    // Where a start orb lands")]
+        self.assertNotIn("asyncAfter", hover); self.assertNotIn("setExpanded", hover)   # hover tints, a click opens (Oct 21: hover-open was laggy)
+        self.assertIn('expanded == id ? command("view", id) : setExpanded(id)', self.swift)
         self.assertIn('NSEvent.addGlobalMonitorForEvents(matching:.leftMouseDown) { [weak self] _ in self?.js("shelf","blur") }', panels)   # a click off the shelf closes it
 
     def test_hidden_shelf_costs_nothing_and_drops_its_hover(self):
@@ -468,16 +466,16 @@ print("shelf follows")
         self.assertIn("NSEvent.pressedMouseButtons == 0", shared)   # never mid-drag or while a button is held
         self.assertIn("from != to", shared)
         # the same side-and-offset formula the shelf-follow harness proves
-        self.assertIn("MeetingFrame.clamp(MeetingFrame.follow(f, from, to, right: f.midX > from.midX, top: f.midY > from.midY), to)", shared)
+        self.assertIn("PanelFrame.clamp(PanelFrame.follow(f, from, to, right: f.midX > from.midX, top: f.midY > from.midY), to)", shared)
         box = self.swift[self.swift.index("    func followPointerScreen()"):self.swift.index("    func pointElement(")]
         panels = self.swift[self.swift.index("final class AgentPanels"):self.swift.index("final class RoutineWake")]
         shelf = panels[panels.index("    func follow()"):panels.index("    // The agent's orb lifts off")]
         for body in [box, shelf]:   # box, typing box, answer, dictation pill; agent shelf and the done card beside it
             self.assertIn("pointerFollow(", body)
-            for slide in ["animator()", "NSAnimationContext", "glide(", "animate: true", "MeetingFrame.follow("]:
+            for slide in ["animator()", "NSAnimationContext", "glide(", "animate: true", "PanelFrame.follow("]:
                 self.assertNotIn(slide, body)
         self.assertEqual(self.swift.count("pointerFollow("), 4)   # definition, box, shelf check and shelf move: no per-panel copies
-        self.assertEqual(self.swift.count("MeetingFrame.follow("), 1)
+        self.assertEqual(self.swift.count("PanelFrame.follow("), 1)
         show = self.swift[self.swift.index("    func show()"):self.swift.index("    func hide(")]
         self.assertIn("startFollowingPointerScreen()", show)   # the dictation pill opens through show() too
         self.assertIn("pill(true); show()", self.swift)

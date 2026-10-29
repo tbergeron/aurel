@@ -82,15 +82,9 @@ for (const [label, keys] of Object.entries(want)) if (JSON.stringify(capsOf(labe
         self.assertNotIn('ask to focus it', self.page)
         self.assertIn('click it to open that window', self.page)   # the mini screen opens its window on click (README)
 
-    def test_meeting_page_says_what_devin_and_pi_get(self):
-        brain = (ROOT / 'atticus.py').read_text()
-        self.assertIn("if client() != 'claude':\n        raise RuntimeError(f'Meeting Copilot stays on this Mac", brain)   # no answers off Claude
-        self.assertIn("$('mt-hint').textContent = other ? `With ${NAMES[provider]}, it saves the transcript on this Mac. Answers and recaps need Claude.`", self.page)
-
     def test_provider_row_names_no_client_before_the_check(self):
         self.assertIn("['claude', 'AI Provider', 'Checking…',", self.page)   # Devin, Pi and server users never read "Claude" first
         self.assertNotIn('Checking your Claude sign-in', self.page)
-        self.assertIn("$('wk-brain').hidden = $('wk-plan').hidden = provider === 'server'", self.page)   # no plan to choose on a custom server
 
     def test_failed_asks_only_open_setup_automatically_once_per_launch(self):
         swift = (ROOT / 'Atticus.swift').read_text()

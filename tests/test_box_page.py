@@ -6,7 +6,36 @@ import sys
 import tempfile
 import unittest
 
-from tests.test_shelf_page import HARNESS
+# A page in a real WKWebView that is never put in a window: it runs a script, prints its result and what the page posted.
+HARNESS = r'''import Cocoa
+import WebKit
+// Loads the page as AgentPanels does; on its "ready" post runs argv[2] as an async function body, prints {"result", "posts", "errors"}.
+final class Harness: NSObject, WKScriptMessageHandler {
+    var posts: [Any] = [], web: WKWebView!
+    func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
+        if m.name == "errors" { posts.append(["error": m.body]); return }
+        posts.append(m.body)
+        guard (m.body as? [String: Any])?["action"] as? String == "ready" else { return }
+        web.callAsyncJavaScript(CommandLine.arguments[2], arguments: [:], in: nil, in: .page) { r in
+            switch r {
+            case .success(let x):
+                let out = try! JSONSerialization.data(withJSONObject: ["result": x ?? NSNull(), "posts": self.posts])
+                print(String(data: out, encoding: .utf8)!); exit(0)
+            case .failure(let e): print(e); exit(1)
+            }
+        }
+    }
+}
+NSApplication.shared.setActivationPolicy(.prohibited)   // no Dock icon, no menu, no window
+let h = Harness(), cfg = WKWebViewConfiguration()
+cfg.userContentController.add(h, name: "agents"); cfg.userContentController.add(h, name: "errors")
+cfg.userContentController.addUserScript(WKUserScript(source: "addEventListener('error',e=>webkit.messageHandlers.errors.postMessage(String(e.message)));addEventListener('unhandledrejection',e=>webkit.messageHandlers.errors.postMessage(String(e.reason)))", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+h.web = WKWebView(frame: NSRect(x: 0, y: 0, width: 260, height: 400), configuration: cfg)
+h.web.loadHTMLString(try! String(contentsOfFile: CommandLine.arguments[1], encoding: .utf8), baseURL: nil)
+DispatchQueue.main.asyncAfter(deadline: .now() + 50) { print("timeout"); exit(1) }
+NSApplication.shared.run()
+'''
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = r'''
@@ -61,12 +90,6 @@ for (let i=0;i<10;i++) {
   out.turns.push([inView(turn.querySelector('.elapsed')), inView(turn.querySelector('.step.live')), !turn.querySelector('.elapsed span'), turn.querySelectorAll('.elapsed').length]);
   ui.line('✓ Finished the request.'); if(i===1)ui.line('i Learned: change the setting'); ui.finished(); settle();
 }
-ui.line('i Support: Atticus is free, leave a tip'); settle();
-const support=document.querySelector('.tip.kofi'), link=support.querySelector('button:not(.off)');
-link.scrollIntoView(); const lr=link.getBoundingClientRect(), bg=getComputedStyle(link).backgroundColor;
-out.support=[link.tagName, ui.pointer([lr.x+lr.width/2,lr.y+lr.height/2]), getComputedStyle(link).cursor]; settle();
-out.support.push(bg!==getComputedStyle(link).backgroundColor);
-link.click(); out.support.push(!support.isConnected); ui.pointer([]);
 ui.dictate(true); ui.learned('Atticus'); const dn = document.getElementById('dn');
 out.learned = [dn.textContent, getComputedStyle(dn).display, dn.className];
 return out;
@@ -131,8 +154,6 @@ return {quiet, timeout, gone: document.querySelectorAll('.hf').length, words: th
         self.assertEqual(out['mix'], 'Queued an agent for “Tents”. It starts when another one finishes. I started agents on “Stoves” and “Maps”. I’ll ping you when they’re done.')
         self.assertEqual(out['turns'], [[True, True, True, 1]] * 10)
         self.assertEqual(out['dismissedDuringAsk'], [[True, True, 1, True, True]] * 3)
-        self.assertEqual(out['support'], ['BUTTON', True, 'pointer', True, True])
-        self.assertTrue(any(isinstance(p, dict) and p.get('kofi') for p in got['posts']))
         self.assertEqual(out['learned'], ['Learned “Atticus” Undo', 'flex', 'dn tick'])
 
     def test_minimize_keeps_live_work_and_restores_scroll(self):
