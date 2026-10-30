@@ -17,15 +17,14 @@ NATIVE = ['NativeUI.swift', 'Orb.swift', 'Answer.swift', 'Settings.swift', 'Onbo
 PREFS = {'hotkeyLabel': '⌃⌥Space', 'login': True, 'paused': False, 'volume': .16, 'client': 'claude', 'model': 'haiku',
          'routing': 'balanced', 'microphone': 'automatic', 'agentModel': 'sonnet', 'agentUserTools': True, 'screen': 'auto',
          'speak': False, 'hideWhenSharing': True, 'menuIcon': True, 'autoUpdate': True, 'safe': True,
-         'learnMe': True, 'stats': True, 'tips': True, 'draw': True, 'dictateMode': 'verbatim',
-         'dictateHotkeyLabel': '', 'dictateHistory': True, 'input': 'voice', 'talkMode': 'hold', 'speechModel': 'speech',
-         'improve': False}
+         'learnMe': True, 'tips': True, 'draw': True, 'dictateMode': 'verbatim',
+         'dictateHotkeyLabel': '', 'dictateHistory': True, 'input': 'voice', 'talkMode': 'hold', 'speechModel': 'speech'}
 STATE = {'today': {'asks': 3, 'usd': .004, 'secs': 3}, 'week': {'asks': 21, 'usd': .03, 'secs': 3.4}, 'all': {'asks': 140, 'usd': .2, 'secs': 3.8},
          'rules': ['When I say focus mode, close Slack and open Notes'], 'skills': [{'say': 'standup', 'reply': 'Opened Zoom and the standup notes'}],
          'me': {'facts': [{'id': 'f1', 'category': 'basics', 'kind': 'name', 'value': 'Sam', 'source': 'you', 'date': 'Oct 19'}]}, 'plan': {'ok': True, 'text': 'Signed in. Claude Max.'},
          'asks': [{'at': '2026-10-19 09:30:00', 'task': 'weather tomorrow', 'reply': 'Sunny, 68°F.'}, {'at': '2026-10-19 08:10:00', 'task': 'open my notes', 'reply': 'Opened Notes.'}]}
 ROUTINES = [{'id': 'r1', 'kind': 'time', 'at': '08:00', 'days': 'weekdays', 'ask': 'Summarize my calendar', 'mode': 'cheapest'}]
-DICTATION = {'words': ['Aurel', 'PostHog'], 'stats': {'today': 412, 'words': 18250, 'minutes': 96, 'sessions': 320},
+DICTATION = {'words': ['Aurel', 'Parakeet'], 'stats': {'today': 412, 'words': 18250, 'minutes': 96, 'sessions': 320},
              'history': [{'id': 'd1', 'timestamp': 1792425600, 'app': 'Notes', 'text': 'Pick up the desk lamp after school.'},
                          {'id': 'd2', 'timestamp': 1792422000, 'app': 'Messages', 'text': 'On my way, see you in ten.'}]}
 TILE = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Crect width='30' height='30' rx='7' fill='%23COLOR'/%3E%3C/svg%3E"
@@ -75,7 +74,7 @@ SCENES = {
     ],
     'onboarding': [
 {'name': 'welcome', 'calls': OB, 'wait': 2}] + [{'name': p, 'calls': [['_go', p]], 'wait': 3.2} for p in
-                   ['perms', 'agents', 'try', 'mac', 'text', 'dictate', 'point', 'work', 'improve', 'done']] + [
+                   ['perms', 'agents', 'try', 'mac', 'text', 'dictate', 'point', 'work', 'done']] + [
                   {'name': 'perms-sheet', 'calls': [['_go', 'perms'], ['_sheet']], 'wait': 1.5}],
     'settings': [
         {'name': 'general', 'calls': load() + [['tab', 'general']]},

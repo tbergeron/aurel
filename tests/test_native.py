@@ -22,7 +22,6 @@ from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import aurel
 if os.environ.get('BENCH') == '1':
-    aurel.ping = lambda: None
     aurel.start_claude = lambda: None
     aurel.look = lambda: []
     aurel.app_named = lambda _: 'Spotify'

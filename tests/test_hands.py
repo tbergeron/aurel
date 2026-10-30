@@ -418,7 +418,7 @@ print("Clicked Export")
         def answer(*args, **_):
             aurel.run.ok = True; aurel.run.ran = aurel.run.cmds = []
             return 'Export opened.',0,[]
-        with patch.multiple(aurel, ping=lambda:None, look=lambda:[], fast=lambda _:None,
+        with patch.multiple(aurel, look=lambda:[], fast=lambda _:None,
                             window_summary=lambda *_:{'app':'Fixture','window':'Window','text':'Worksheet question and answers. ' * 10}, front=lambda:('Fixture','Window'), osa=lambda *_:'', screens=lambda:[],
                             describe=lambda *_:'Fixture display', me_line=lambda:'', selection_context=lambda:'',
                             relevant_rules=lambda _: '', workflows=lambda *args:'', recent=lambda:[], remember_turn=lambda *_:None,
@@ -447,7 +447,7 @@ print("Clicked Export")
             prompts.append(args[0])
             aurel.run.ok = True; aurel.run.ran = aurel.run.cmds = []
             return 'Done.',0,[]
-        with patch.multiple(aurel, ping=lambda:None, look=slow_capture, fast=lambda _:None,
+        with patch.multiple(aurel, look=slow_capture, fast=lambda _:None,
                             window_summary=slow_summary, front=lambda:('Fixture','Window'), osa=lambda *_:'', screens=lambda:[],
                             describe=lambda *_:'Fixture display', me_line=lambda:'', selection_context=lambda:'',
                             relevant_rules=lambda _: '', workflows=lambda *args:'', recent=lambda:[], remember_turn=lambda *_:None,
@@ -469,7 +469,7 @@ print("Clicked Export")
             time.sleep(.05)
             finished.set()
             return {'app': 'Fixture', 'window': 'Window', 'text': 'Context'}
-        with patch.multiple(aurel, ping=lambda:None, look=lambda:[],
+        with patch.multiple(aurel, look=lambda:[],
                             fast=lambda _:'Done.', window_summary=summary, selection_context=lambda:'',
                             remember_turn=lambda *_:None, log_turn=lambda *_, **__:None), \
              patch.object(aurel, 'say'), patch('sys.argv', ['aurel.py', 'instant fixture command']), \
@@ -504,7 +504,7 @@ print("Clicked Export")
             if str(text).startswith('? '):
                 cards.append(text)
                 Path(text.split('\t')[2]).write_text('y')
-        with patch.multiple(aurel,ping=lambda:None,hands_map=lambda _: {'nodes':[{'label':'Name'}]},
+        with patch.multiple(aurel,hands_map=lambda _: {'nodes':[{'label':'Name'}]},
                             look=lambda:[],remember_turn=lambda *_:None,log_turn=lambda *_, **__:None), \
              patch('builtins.print',side_effect=display), patch.object(aurel,'say'), patch.object(aurel,'hands_action',side_effect=self.session((resolved,acted))), \
              patch.object(aurel,'start_claude') as model, patch.object(aurel,'ask_user',wraps=aurel.ask_user), \

@@ -31,13 +31,11 @@ class BrainTests(unittest.TestCase):
     def test_unlaunchable_claude_is_setup_instead_of_a_crash(self):
         with patch.object(aurel, 'start_claude', return_value=None), \
              patch.object(aurel.subprocess, 'run', side_effect=PermissionError(13, 'private path')), \
-             patch.object(aurel, 'say'), patch.object(aurel, 'report_error') as error:
+             patch.object(aurel, 'say'):
             reply, steps, commands = aurel.run('fixture')
             self.assertIn('Could not start Claude Code', reply)
             self.assertNotIn('private path', reply)
             self.assertEqual((steps, commands, aurel.run.why), (0, [], 'setup_needed'))
-            aurel.report_worker_failure('claude', 'haiku', aurel.run.why)
-            error.assert_called_once_with('setup', worker='claude', model='haiku', why='setup_needed')
 
     def test_routing_migrates_legacy_choices_and_honors_one_mode(self):
         cases = [({}, 'balanced'), ({'escalate': False}, 'cheapest'),
@@ -60,7 +58,7 @@ class BrainTests(unittest.TestCase):
             prior = Path(os.environ['AUREL_ASK'], 'prior-work.json'); brain.prior = json.loads(prior.read_text()) if prior.exists() else None   # the ask folder goes with main()
             return reply, .001, actions[:]
         brain = unittest.mock.Mock(side_effect=attempt)
-        with patch.multiple(aurel, ping=lambda: None, fast=lambda _: quick,
+        with patch.multiple(aurel, fast=lambda _: quick,
                             front=lambda: ('Fixture', 'Scratch'), osa=lambda *a: '', screens=lambda: [],
                             describe=lambda *a: '', selection_context=lambda: '', relevant_rules=lambda _: '',
                             recent=lambda: [], workflows=lambda *a: '', screen_for=lambda *a: None, wait_commit=lambda: True,
@@ -74,12 +72,10 @@ class BrainTests(unittest.TestCase):
             aurel.main()
         return brain, start, ask, log
 
-    def test_a_declined_model_action_is_not_retried_or_reported_as_a_failure(self):
-        with patch.object(aurel, 'save_request', side_effect=lambda directory, _: Path(directory, 'declined').touch()), \
-             patch.object(aurel, 'report_error') as error, patch.object(aurel, 'report') as report:
+    def test_a_declined_model_action_is_not_retried(self):
+        with patch.object(aurel, 'save_request', side_effect=lambda directory, _: Path(directory, 'declined').touch()):
             brain, start, ask, log = self.routing_ask({'routing': 'balanced'}, [('Not done.', False, ['fixture action'])])
         self.assertEqual(brain.call_count, 1); start.assert_not_called(); ask.assert_not_called()
-        error.assert_not_called(); report.assert_not_called()
         self.assertEqual(aurel.TURN['status'], 'cancelled'); log.assert_called_once()
 
     def test_declining_a_tool_does_not_hide_a_later_worker_exit(self):
@@ -93,18 +89,9 @@ class BrainTests(unittest.TestCase):
         self.assertFalse(aurel.run.ok)
         self.assertEqual(aurel.run.why, 'stopped')
         self.assertIn('Claude stopped', reply)
-        with patch.object(aurel, 'save_request', side_effect=lambda directory, _: Path(directory, 'declined').touch()), \
-             patch.object(aurel, 'report') as report, patch.object(aurel, 'report_error') as error:
+        with patch.object(aurel, 'save_request', side_effect=lambda directory, _: Path(directory, 'declined').touch()):
             self.routing_ask({'routing': 'cheapest'}, [(reply, False, [])], why=aurel.run.why)
         self.assertEqual(aurel.TURN['status'], 'failed')
-        report.assert_called_once()
-        error.assert_called_once_with('worker_exit', worker='claude', model='haiku', why='stopped')
-
-    def test_main_reports_one_real_failure_or_one_setup_problem(self):
-        for why, kind in [('tool_failed', 'worker_exit'), ('server_rejected', 'setup'), ('provider_needed', 'setup')]:
-            with self.subTest(why=why), patch.object(aurel, 'report_error') as sent:
-                self.routing_ask({'routing': 'cheapest'}, [('Not done.', False, [])], why=why)
-            sent.assert_called_once_with(kind, worker='claude', model='haiku', why=why)
 
     def test_missing_backend_preconditions_keep_the_setup_reason(self):
         for need, why in [('login', 'signed_out'), ('install', 'setup_needed')]:
@@ -115,12 +102,10 @@ class BrainTests(unittest.TestCase):
 
     def test_saying_no_to_an_instant_cli_action_is_a_handled_exit(self):
         with patch('sys.argv', ['aurel.py', '--fast', 'Fixture task']), \
-             patch.object(aurel, 'ping'), \
              patch.object(aurel, 'allow_focus'), patch.object(aurel, 'hands_command', return_value=False), \
              patch.object(aurel, 'fast', return_value='The user said no.'), patch.object(aurel, 'remember_turn'), \
-             patch.object(aurel, 'report_error') as sent, patch('sys.stdout', io.StringIO()):
+             patch('sys.stdout', io.StringIO()):
             aurel.main()
-        sent.assert_not_called()
         self.assertEqual(aurel.TURN['status'], 'cancelled')
 
     def test_a_slow_task_that_saved_nothing_never_suggests_remember_how_to(self):
@@ -183,12 +168,11 @@ class BrainTests(unittest.TestCase):
         self.assertEqual(brain.call_count, 1); start.assert_not_called()   # no tools tried: a plain answer stays on Haiku
 
     def test_explanatory_failure_words_are_not_task_failures_without_an_action(self):
-        with patch.object(aurel, 'report') as report:
-            for reply in ("In this equation, you can't combine those terms first.", "This membrane channel cannot carry every molecule."):
-                self.routing_ask({'routing':'cheapest'}, [(reply, True, [])])
-            report.assert_not_called()
-            self.routing_ask({'routing':'cheapest'}, [("The sandbox blocks app launches, so I couldn't open it.", True, ['open -a Fixture'])])
-        self.assertEqual(report.call_args.args[-1], 'could not do it')
+        for reply in ("In this equation, you can't combine those terms first.", "This membrane channel cannot carry every molecule."):
+            self.routing_ask({'routing':'cheapest'}, [(reply, True, [])])
+            self.assertNotEqual(aurel.TURN['status'], 'failed')
+        self.routing_ask({'routing':'cheapest'}, [("The sandbox blocks app launches, so I couldn't open it.", True, ['open -a Fixture'])])
+        self.assertEqual(aurel.TURN['status'], 'failed')
 
     def test_balanced_offer_to_continue_escalates_and_a_finished_reply_does_not(self):
         # Oct 21: "play it and win" looked, then offered "say the word and I'll keep playing"; the model marks stopping short with [sonnet], no word list
@@ -241,7 +225,7 @@ class BrainTests(unittest.TestCase):
                     brain.handoff = brain.handoffs[0] if brain.call_count == 2 else None
                     return ('', None, ['moved']) if brain.handoff else (first, .001, [])
                 brain = unittest.mock.Mock(side_effect=attempt)
-                with patch.multiple(aurel, ping=lambda: None, fast=lambda _: None,
+                with patch.multiple(aurel, fast=lambda _: None,
                                     front=lambda: ('Fixture', 'Scratch'), osa=lambda *a: '', screens=lambda: [],
                                     selection_context=lambda: '', relevant_rules=lambda _: '', recent=lambda: [],
                                     workflows=lambda *a: '', screen_for=lambda *a: None, wait_commit=lambda: True,
@@ -269,7 +253,7 @@ class BrainTests(unittest.TestCase):
             with self.subTest(why=why):
                 brain = unittest.mock.Mock(return_value=('Claude: You’ve hit your weekly limit · resets 3pm', 0, []))
                 brain.ok = False; brain.cmds = brain.ran = brain.observed = []; brain.handoff = None; brain.handoffs = []; brain.work = False; brain.why = why
-                with patch.multiple(aurel, ping=lambda: None, fast=lambda _: None,
+                with patch.multiple(aurel, fast=lambda _: None,
                                     front=lambda: ('Fixture', 'Scratch'), osa=lambda *a: '', screens=lambda: [],
                                     selection_context=lambda: '', relevant_rules=lambda _: '', recent=lambda: [],
                                     workflows=lambda *a: '', screen_for=lambda *a: None, wait_commit=lambda: True,
@@ -285,7 +269,7 @@ class BrainTests(unittest.TestCase):
     def test_partial_request_handoff_keeps_one_original_log_row(self):
         brain=unittest.mock.Mock(return_value=('',None,[]));brain.handoff={'accepted':True};brain.handoffs=[brain.handoff];brain.ran=[];brain.ok=True
         request=json.dumps({'front':'Fixture','task':'Original request','done':['Opened fixture.'],'remaining':'Finish it'})
-        with patch.multiple(aurel,ping=lambda:None,fast=lambda _:None,allow_focus=lambda _:None,
+        with patch.multiple(aurel,fast=lambda _:None,allow_focus=lambda _:None,
                             front=lambda:('Fixture','Scratch'),osa=lambda *a:'',screens=lambda:[],selection_context=lambda:'',
                             relevant_rules=lambda _:'',recent=lambda:[],workflows=lambda *a:'',screen_for=lambda *a:None,
                             wait_commit=lambda:True,run=brain,start_ai=lambda *a:None), \
@@ -303,7 +287,7 @@ class BrainTests(unittest.TestCase):
             def start(self): self.starts += 1
             def join(self, *_): pass
         brain = unittest.mock.Mock(return_value=('Done.', 0, [])); brain.ok = True; brain.cmds = brain.ran = []; brain.observed = []
-        with patch.multiple(aurel, ping=lambda: None, fast=lambda _: None,
+        with patch.multiple(aurel, fast=lambda _: None,
                             front=lambda: ('Fixture', 'Scratch'), osa=lambda *a: '', screens=lambda: [],
                             describe=lambda *a: '', me_line=lambda: '', selection_context=lambda: '',
                             relevant_rules=lambda _: '', recent=lambda: [], workflows=lambda *a: '',
@@ -316,30 +300,12 @@ class BrainTests(unittest.TestCase):
         self.assertEqual(NoThread.made[0].starts, 0)
         self.assertIn('Text head unavailable', brain.call_args.args[0])
 
-    def test_a_correction_reports_the_ask_not_the_answer_it_corrects(self):
-        brain = unittest.mock.Mock(return_value=('Done.', 0, [])); brain.ok = True; brain.cmds = brain.ran = []; brain.observed = []
-        earlier = [{'t': time.time(), 'q': 'Summarize my inbox', 'a': 'Dana wrote about the lawsuit settlement'}]
-        with patch.multiple(aurel, ping=lambda: None, fast=lambda _: None,
-                            front=lambda: ('Fixture', 'Scratch'), osa=lambda *a: '', screens=lambda: [],
-                            describe=lambda *a: '', me_line=lambda: '', selection_context=lambda: '',
-                            relevant_rules=lambda _: '', recent=lambda: earlier, workflows=lambda *a: '',
-                            screen_for=lambda *a: None, wait_commit=lambda: True, run=brain, unlearn=lambda *a: None,
-                            remember_turn=lambda *a: None, restore_focus=lambda *a: None, POSTHOG_KEY='fixture-token',
-                            remember_workflow=lambda task, reply, *a: (reply, False), learn=lambda *a: False, tip=lambda *a: None), \
-             patch.object(aurel, 'pref', side_effect=lambda k, d: True if k == 'improve' else d), \
-             patch.object(aurel, 'posthog') as sent, patch.object(aurel.threading, 'Thread'), \
-             patch('sys.argv', ['aurel.py', 'no, I meant the work inbox']), patch('sys.stdout', io.StringIO()):
-            aurel.main()
-        props = next(call.args[1] for call in sent.call_args_list if call.args[0] == 'task_failed')
-        self.assertEqual((props['task'], props['why']), ('Summarize my inbox', 'the user said it was wrong'))
-        self.assertNotIn('lawsuit', json.dumps(props))
-
     def test_front_window_is_one_system_events_call_and_displays_are_read_alongside(self):
         calls = []
         def osa(script, *_): calls.append(script); return 'Q3 plan, draft, -1400, 30' if 'of front window' in script else ''
         brain = unittest.mock.Mock(return_value=('Done.', 0, [])); brain.ok = True; brain.cmds = brain.ran = []; brain.observed = []
         displays = unittest.mock.Mock(return_value=[('Built-in', 0, 0, 1470, 956, True), ('Acer', -1920, 0, 1920, 1080, False)])
-        with patch.multiple(aurel, ping=lambda: None, fast=lambda _: None, osa=osa, screens=displays,
+        with patch.multiple(aurel, fast=lambda _: None, osa=osa, screens=displays,
                             window_summary=lambda *a: {'text': 'Readable'}, tool_help=lambda *a, **k: '', selection_context=lambda: '',
                             relevant_rules=lambda _: '', recent=lambda: [], workflows=lambda *a: '', wait_commit=lambda: True, run=brain,
                             remember_turn=lambda *a: None, restore_focus=lambda *a: None, remember_workflow=lambda task, reply, *a: (reply, False),
@@ -736,7 +702,7 @@ print(json.dumps(aurel.look(cleanup=sys.argv[3] != 'standalone')))
 
     def test_fast_action_is_logged_once_at_zero_cost(self):
         with tempfile.TemporaryDirectory() as root, patch.object(aurel, 'DIR', root), \
-             patch.multiple(aurel, ping=lambda: None,
+             patch.multiple(aurel,
                             fast=lambda _: 'Opened Spotify.', remember_turn=lambda *_: None), \
              patch.object(aurel.os, 'setpgrp'), patch.object(aurel.signal, 'signal'), \
              patch('sys.argv', ['aurel.py', '--fast', 'open Spotify']), \
@@ -783,7 +749,7 @@ print(json.dumps(aurel.look(cleanup=sys.argv[3] != 'standalone')))
 
     def test_confirmed_instant_command_skips_context_work(self):
         with patch.multiple(aurel, **{name: unittest.mock.DEFAULT for name in
-                            ['start_ai', 'ping', 'fast', 'remember_turn', 'say', 'front', 'stop_claude', 'allow_focus']}) as mocks, \
+                            ['start_ai', 'fast', 'remember_turn', 'say', 'front', 'stop_claude', 'allow_focus']}) as mocks, \
              patch.object(aurel.threading, 'Thread') as threads, patch.object(aurel.os, 'setpgrp'), \
              patch.object(aurel.signal, 'signal'), patch('sys.argv', ['aurel.py', '--wait']), \
              patch('sys.stdin', io.StringIO('Notes\topen Notes\n')), patch.dict(os.environ, {'AUREL_COMMIT': ''}):
@@ -801,7 +767,7 @@ print(json.dumps(aurel.look(cleanup=sys.argv[3] != 'standalone')))
         for front, expected in [(True, 'Previous'), (7, 'Previous'), ({'app': 'Fixture'}, 'Previous'),
                                 (['Fixture'], 'Previous'), (None, 'Previous'), ('', 'Previous'), ('Fixture', 'Fixture')]:
             with self.subTest(front=front), \
-                 patch.multiple(aurel, ping=lambda: None, start_ai=lambda: None,
+                 patch.multiple(aurel, start_ai=lambda: None,
                                 fast=lambda _: 'Done.', remember_turn=lambda *a: None, say=lambda *a: None,
                                 allow_focus=lambda _: None), \
                  patch.object(aurel, 'log_turn') as log, patch.object(aurel.threading, 'Thread'), \
@@ -1182,7 +1148,6 @@ print(json.dumps(aurel.look(cleanup=sys.argv[3] != 'standalone')))
             marker, ready = Path(root) / 'action', Path(root) / 'ready'
             action = f'import time; from pathlib import Path; Path({str(ready)!r}).touch(); time.sleep(.5); Path({str(marker)!r}).touch()'
             script = f'''import aurel, subprocess, sys, time
-aurel.ping = lambda: None
 def fast(_):
     subprocess.Popen([sys.executable, '-c', {action!r}])
     time.sleep(30)

@@ -5,7 +5,6 @@ import tempfile
 
 config = tempfile.TemporaryDirectory(prefix='aurel-test-config-')
 os.environ['AUREL_DIR'] = config.name
-os.environ['AUREL_POSTHOG_KEY'] = ''   # tests that clear os.environ also drop AUREL_DIR; with no key nothing reaches PostHog
 atexit.register(config.cleanup)
 
 

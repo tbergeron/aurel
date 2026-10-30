@@ -179,14 +179,13 @@ func py(_ args: [String], _ extra: [String: String] = [:]) -> Process {
     workers.append(p)
     return p
 }
-func telemetry(_ args: [String]) {}
 struct Selection { let text: String }
 struct AppRef: Equatable {}
 final class NSWorkspace { static let shared = NSWorkspace(); var frontmostApplication: AppRef? }
 final class Harness {
     var dictateSelectionPending = false, dictateCleanup = false, busy = true, dictating = true
     var dictateID = 1, text = "Exact words.", inserted: [String] = [], dictateBefore = "Notes before the cursor."
-    var dictateFellBack = false, dictateTimedOut = false, dictateSelectionRetried = false
+    var dictateSelectionRetried = false
     var dictationTargetApp: AppRef?
     var dictateSelection: Selection?, dictateProcess: Process?, dictateInput: FileHandle?, dictateOutput: FileHandle?
     func captureDictationSelection(retry: Bool = false) {}
@@ -282,7 +281,6 @@ final class Harness {
     var liveTyped = "", liveTyping = false, dictationTargetApp: AppRef?   // Type as I talk: off in these fixtures
     func liveRest(_ heard: String) -> String { heard }
     func fitted(_ words: String, into target: Target) -> String { words }
-    func recordDictationEvent(_ insert: String) {}
 ''' + method + r'''}
 let user = AppRef(1), other = AppRef(2), target = Target(user), h = Harness()
 h.dictateSelection = target; NSWorkspace.shared.frontmostApplication = user
@@ -534,7 +532,6 @@ final class Harness {
         if let d = arg as? [String: Any] { log.append("\(call) \(d["text"]!) \(d["ok"]!)"); if let w = d["words"] as? String { words.append(w) } } else { log.append("\(call) \(arg as? String ?? "")") }
     }
     func prepareDictation(_ value: String, target: Target, whole: String? = nil) -> () -> Void { {} }
-    func recordDictationEvent(_ insert: String) {}
     var liveTyped = "", liveTyping = false, dictationTargetApp: AppRef?   // Type as I talk: off in these fixtures
     func liveRest(_ heard: String) -> String { heard }
     func fitted(_ words: String, into target: Target) -> String { words }

@@ -227,7 +227,7 @@ print("fit ok")
         self.assertLess(session.index('dictateSelectionPending = false'), session.index('guard let selected else'))
         self.assertIn('dictationTargetApp = NSWorkspace.shared.frontmostApplication', session)
         self.assertIn('if retry { finishDictation() }', session)
-        finish = source[source.index('    func finishDictation()'):source.index('    func recordDictationEvent(')]
+        finish = source[source.index('    func finishDictation()'):source.index('    func dictationDeliveryFailed(')]
         self.assertIn('captureDictationSelection(retry: true)', finish)
         self.assertIn('!dictateSelectionRetried', finish)
         self.assertIn('NSWorkspace.shared.frontmostApplication == app', finish)

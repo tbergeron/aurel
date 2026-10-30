@@ -18,7 +18,7 @@ class OnboardingMatchesAppTests(unittest.TestCase):
         return self.page[i:self.page.index('\n}\n', i)]
 
     def test_skip_all_jumps_to_the_closing_pages(self):
-        self.assertIn('if (setupPages.firstIndex(of: m.cur) ?? 0) < setupPages.firstIndex(of: "improve")! { PillButton(label: "Skip All", quiet: true, plain: true, height: 30, pad: 10) { m.go("improve") } }', self.page)
+        self.assertIn('if (setupPages.firstIndex(of: m.cur) ?? 0) < setupPages.firstIndex(of: "done")! { PillButton(label: "Skip All", quiet: true, plain: true, height: 30, pad: 10) { m.go("done") } }', self.page)
         self.assertIn('{ m.post(["do": "done"]) }', self.view('Done'))
         swift = (ROOT / 'Aurel.swift').read_text()
         self.assertIn('if b["do"] == "done" { return finish() }', swift)

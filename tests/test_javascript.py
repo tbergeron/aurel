@@ -87,7 +87,7 @@ precondition(m.wave.allSatisfy { $0 == 3 } && m.pill == "" && !m.turns.contains 
     def test_worker_start_failure_has_persistent_recovery_actions(self):
         box = (ROOT / 'Box.swift').read_text()
         native = (ROOT / 'Aurel.swift').read_text()
-        worker = box[box.index('        case .worker:'):box.index('        case .improve:')]
+        worker = box[box.index('        case .worker:'):box.index('        case .pick(')]
         self.assertIn('Aurel’s helper couldn’t start', worker)
         self.assertIn('m.post(["workerRetry": true])', worker)
         self.assertIn('m.post(["setup": true])', worker)

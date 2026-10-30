@@ -38,7 +38,7 @@ class ChatTests(unittest.TestCase):
             worker.ok = ok; worker.work = False; worker.ran = list(ran); worker.cmds = []
             worker.observed = []; worker.handoff = None; worker.handoffs = []; worker.why = ''
             return answer, 0, []
-        with patch.multiple(aurel, ping=lambda:None, fast=lambda _:None,
+        with patch.multiple(aurel, fast=lambda _:None,
                             front=lambda:('Fixture','Window'), osa=lambda *_:'', screens=lambda:[],
                             describe=lambda *_:'Fixture', me_line=lambda:'', selection_context=lambda:'',
                             relevant_rules=lambda _:'', workflows=lambda *args:'', tool_help=lambda *args,**kw:'',

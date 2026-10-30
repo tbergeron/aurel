@@ -217,7 +217,7 @@ enum Prefs {
         "wakeWord": false, "microphone": "automatic", "quietAudio": false, "quietLevel": 0.18, "agentModel": "sonnet", "localModel": "gemma4", "agentUserTools": true, "fixSetup": false,
         "selection": true, "ahead": true, "aheadDelay": 0.7, "live": true, "screen": "auto", "openOn": "here", "workIn": "back", "miniScreen": true, "draw": true, "guideSteps": "auto", "pageJS": false,
         "speak": false, "showAnswers": "stream", "autoCopy": false, "hideWhenSharing": true, "menuIcon": true, "autoUpdate": true,
-        "learn": true, "safe": true, "pointer": false, "learnMe": true, "saveChats": true, "stats": true, "tips": true, "askMe": true, "input": "voice", "talkMode": "hold", "speechModel": "speech", "parakeetModel": "v3", "unloadAfter": 5, "improve": false, "improveAsked": false, "draftInsert": "ask",
+        "learn": true, "safe": true, "pointer": false, "learnMe": true, "saveChats": true, "tips": true, "askMe": true, "input": "voice", "talkMode": "hold", "speechModel": "speech", "parakeetModel": "v3", "unloadAfter": 5, "draftInsert": "ask",
         "dictateHotkeyCode": -1, "dictateHotkeyMods": 0, "dictateHotkeyLabel": "", "dictateMode": "cleanup", "dictateLive": false, "dictateHistory": true, "dictateLearn": true, "dictateWords": [], "dictateFixes": [String: String](), "boxW": 500, "boxH": 420]
     // Settings → General → Free memory after: idle seconds before the speech and AI models unload, nil for Never.
     static func unloadAfter() -> Double? { let m = num("unloadAfter"); return m > 0 ? m * 60 : nil }
@@ -1036,13 +1036,6 @@ func py(_ args: [String], _ extra: [String: String] = [:]) -> Process {
     env.merge(extra) { $1 }
     p.environment = env
     return p
-}
-
-func telemetry(_ args: [String]) {
-    guard Prefs.bool("stats") else { return }
-    let p = py(["--telemetry"] + args)
-    p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
-    try? p.run()   // its curl child outlives this helper; never wait on an ask
 }
 
 
@@ -2779,7 +2772,6 @@ final class App: NSObject {
                 try? i.write(toFile: askFile, atomically: true, encoding: .utf8); askFile = ""
             }   // an index, or "" = none; failure cards also use r/n
             if let k = b["off"] as? String, k == "tips" { Aurel.settings.apply(k, false); Aurel.settings.push() }   // a tip's own "Turn off"; never safe mode
-            if let v = b["improve"] as? Bool { Aurel.settings.apply("improve", v); Aurel.settings.push() }
             if let item = b["memory"] as? [String: Any] { Aurel.settings.reveal(item) }   // a receipt's item: Settings → Memory, at that item
             if let ok = b["allow"] as? Bool, !askFile.isEmpty { allow(ok) }
         }
@@ -3266,7 +3258,7 @@ final class App: NSObject {
         cancelFast(); noteHidden()
         if dictate {
             dictateCleanup = Prefs.str("dictateMode") == "cleanup"
-            dictateFellBack = false; dictateTimedOut = false; liveTyped = ""; liveTyping = false
+            liveTyped = ""; liveTyping = false
             captureDictationSelection(); replacement = nil
             if dictateCleanup { warmDictationCleanup() }
         } else if replying { offerText = text } else { captureSelection(); replacement = nil }
@@ -3347,7 +3339,7 @@ final class App: NSObject {
         }
         engine.start(device, sampleRate: want.sampleRate, onBuffer) { [weak self] result in
             guard let self, listenID == listeningID else { return }
-            if case .failure(let error) = result { telemetry(["error", "native", "mic_start"]); if replying { stopOfferInput() } else { hush() }; js("msg", "Mic error: \(error.localizedDescription)"); hide(after: 3); return }
+            if case .failure(let error) = result { if replying { stopOfferInput() } else { hush() }; js("msg", "Mic error: \(error.localizedDescription)"); hide(after: 3); return }
             began = Date()   // measure the limit from when the mic is ready
             if quietFollowUp { js("quietListen", true) }   // only now: words said before the mic opened would be lost
             Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] t in
@@ -3553,7 +3545,6 @@ final class App: NSObject {
     }
 
     var correctionTimer: Timer?, learnedWord: String?, dictationAppName = "App", dictateSeconds = 0.0, lastDictation: String?
-    var dictateFellBack = false, dictateTimedOut = false
     @discardableResult func saveDictation(_ value: String, appName: String) -> Bool {
         let saved = DictationData.record(value, raw: text.trimmingCharacters(in: .whitespacesAndNewlines), app: appName, seconds: dictateSeconds > 0 ? dictateSeconds : Date().timeIntervalSince(began))
         if !saved { js("dictated", ["text": "Your words are ready. Couldn’t save history or stats.", "ok": false]) }
@@ -3800,12 +3791,11 @@ final class App: NSObject {
         let early = dictateRun?.key == Self.dictationKey(source)
         if !early { dictateRun?.process.terminate(); dictateRun = sendDictationCleanup(source) }
         stopDictationWorker()
-        guard let run = dictateRun else { dictateFellBack = true; return insertDictation(source) }   // cleanup could not start: the heard words still go in
+        guard let run = dictateRun else { return insertDictation(source) }   // cleanup could not start: the heard words still go in
         let id = dictateID
         run.then { [weak self] cleaned in
             guard let self, dictateID == id, dictateRun === run else { return }
             dictateRun = nil
-            dictateFellBack = cleaned == nil
             NSLog("Dictation cleanup: %.2f s after key-up%@", Date().timeIntervalSince(dictateReleased), early ? " (started early)" : "")
             insertDictation(cleaned ?? source)
         }
@@ -3814,22 +3804,13 @@ final class App: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + limit) { [weak self] in
             guard let self, dictateID == id, dictateRun === run else { return }
             NSLog("Dictation cleanup: no answer in %.1f s, inserting the heard words", limit)
-            dictateFellBack = true; dictateTimedOut = true
             dictateRun = nil; run.process.terminate()
             insertDictation(source)
         }
     }
 
-    func recordDictationEvent(_ insert: String) {
-        telemetry(["dictation", dictateCleanup ? "cleanup" : "verbatim",
-                   String(max(0, Date().timeIntervalSince(dictateReleased))),
-                   dictateCleanup && !dictateFellBack ? "1" : "0",
-                   dictateFellBack ? "1" : "0", dictateTimedOut ? "1" : "0", insert])
-    }
-
     func dictationDeliveryFailed(_ value: String) {
         let failed = dictateSelection == nil ? "No text field." : "Couldn’t insert."
-        recordDictationEvent(dictateSelection == nil ? "no box" : "failed")
         busy = false; dictating = false; dictateSelection = nil; lastDictation = value
         let paste = pasteHotkeyRegistered ? " Press ⌃⌘V to paste it." : ""
         cue("soundStop")
@@ -3854,7 +3835,7 @@ final class App: NSObject {
         let value = rest.isEmpty ? "" : fitted(DictationData.fixed(rest), into: target)
         let id = dictateID, inserted = prepareDictation(value, target: target, whole: liveTyped.isEmpty ? nil : DictationData.fixed(heard))
         if value.isEmpty {   // every word already went in at the pauses
-            recordDictationEvent("ok"); liveTyped = ""
+            liveTyped = ""
             busy = false; dictating = false; dictateSelection = nil
             cue("soundDone"); js("dictated", ["text": "", "ok": true]); hide(after: 0.8); inserted(); return
         }
@@ -3864,7 +3845,7 @@ final class App: NSObject {
         }) { [weak self] ok in
             guard let self, dictateID == id else { return }
             if !ok { dictationDeliveryFailed(value); return }
-            recordDictationEvent("ok"); liveTyped = ""
+            liveTyped = ""
             busy = false; dictating = false; dictateSelection = nil
             cue("soundDone"); js("dictated", ["text": "", "ok": true]); hide(after: 0.8); inserted()
         }
@@ -3949,7 +3930,6 @@ final class App: NSObject {
                 while let i = buffer.firstIndex(of: 10) {
                     let line = String(decoding: buffer[..<i], as: UTF8.self); buffer.removeSubrange(...i)
                     if line == "! setup" { onboarding.open(automatic: true); continue }   // Claude not installed, signed out or no plan
-                    if line == "! improve" { self.js("improve"); continue }   // the one-time "help make Aurel better?" card
                     if line.hasPrefix("▣ "), let value = try? JSONSerialization.jsonObject(with:Data(line.dropFirst(2).utf8)) as? [String:Any] { if Prefs.d["miniScreen"] as? Bool ?? true { self.mini.receive(value) }; continue }
                     if line.hasPrefix("✎ ") {
                         if Prefs.bool("draw"), self.drawing.receive(Data(line.dropFirst(2).utf8)) {
@@ -4022,8 +4002,6 @@ final class App: NSObject {
                 try? FileManager.default.removeItem(atPath: commit)
                 guard let self, self.proc === p else { return }   // a cancelled run ending late must not touch the next one
                 if !self.ahead.isEmpty { self.proc = nil; self.ahead = ""; self.busy = !self.engine.isRunning; return }
-                // Exit 70 means Python already reported the crash; a signal is always an unreported process death.
-                if p.terminationReason == .uncaughtSignal || (p.terminationStatus != 0 && p.terminationStatus != 70) { telemetry(["error", "worker_exit", "python", String(p.terminationStatus)]) }
                 self.busy = false; self.agentMoveFile = ""; self.guardUntil = Date().addingTimeInterval(2); self.proc = nil; self.mini.finish(); self.js("finished")   // Spotify jumps ~0.5 s after play returns
                 self.lastDone = Date(); self.followUp = self.handsFree
                 if !self.answer.isEmpty { self.cue("soundDone") }
@@ -4051,7 +4029,6 @@ final class App: NSObject {
             if let path = point?["image"] as? String { try? FileManager.default.removeItem(atPath:path) }
             busy = false
             if speculative { ahead = ""; return }
-            telemetry(["error", "worker_exit", "python", "-1"])
             pinned = true; js("workerFailed"); show(); return
         }
         warm = nil; proc = w.p; commit = w.commit
@@ -4194,7 +4171,6 @@ final class AgentPanels: NSObject {
             out.fileHandleForReading.readabilityHandler = nil
             DispatchQueue.main.async { [weak self] in
                 guard let self, process === p else { return }
-                if p.terminationReason == .uncaughtSignal || (p.terminationStatus != 0 && p.terminationStatus != 70) { telemetry(["error", "worker_exit", "python", String(p.terminationStatus)]) }
                 // A crash drops its half-read line and box state; a fresh supervisor relists its saved rows.
                 process = nil; input = nil; buffer = Data(); lastBox = nil; restarts += 1
                 DispatchQueue.main.asyncAfter(deadline:.now() + min(60, pow(2, Double(restarts)))) { [weak self] in self?.start() }
@@ -5880,7 +5856,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
         if b["do"] == "connectors" { return Onboarding.connectors { [weak self] c in self?.call("ob.connectors", c) } }
         if b["do"] == "set", let k = b["k"], let v = b["v"] {   // the feature pages' switches and choices
             let choices = ["routing": ["cheapest", "balanced", "capable"], "dictateMode": ["verbatim", "cleanup"]]
-            if ["draw", "improve"].contains(k) { Aurel.settings.apply(k, v == "true") } else if choices[k]?.contains(v) == true { Aurel.settings.apply(k, v) } else { return }
+            if k == "draw" { Aurel.settings.apply(k, v == "true") } else if choices[k]?.contains(v) == true { Aurel.settings.apply(k, v) } else { return }
             Aurel.settings.push(); return push()
         }
         if b["do"] == "recordDictate" { return Aurel.settings.record("dictate") { [weak self] call, args in self?.ob(call, args) } }
@@ -6583,7 +6559,6 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         if k == "parakeetModel" { Parakeet.shared.restart(); send("parakeet", Parakeet.shared.status()) }
         if k == "localModel" { LocalAI.shared.restart(); send("llm", LocalAI.shared.status()) }
         if k == "client", v as? String != "local" { LocalAI.shared.stop() }   // its memory goes back to the Mac
-        if k == "improve" { Prefs.set("improveAsked", true) }   // any answer, here or in setup or the card, is the answer
         if k == "speak", v as? Bool == false { app.shush() }
         if k == "hideWhenSharing" { NSApp.windows.forEach(applySharing) }
         if k == "menuIcon" { bar.item.isVisible = v as? Bool == true }

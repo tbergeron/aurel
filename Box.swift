@@ -53,7 +53,7 @@ struct KeyAction { let label: String; let key: String?; let go: Bool; let esc: B
 enum CardKind {
     case approval(q: String, cmd: String)
     case retry(q: String, p: String, details: String?)
-    case paused, worker, improve
+    case paused, worker
     case pick(q: [MDBlock], options: [PickOption], pics: Bool)
     case agent(eyebrow: String, title: String, answer: [MDBlock], learned: String?, made: [Made], actions: [KeyAction], cost: String?, id: String)
 }
@@ -332,9 +332,6 @@ final class BoxModel: ObservableObject {
         case "respond": _ = respond(arg as? String ?? "")
         case "notice": setStatus(arg as? String ?? "", true)
         case "ask": ask(arg as? [Any] ?? [])
-        case "improve":
-            removeParts { isCard($0) { if case .improve = $0 { return true }; return false } }
-            appendCard(Card(kind: .improve))
         case "pick": pick(arg as? [String: Any] ?? [:])
         case "mode": safeOff = !(arg as? Bool ?? true)
         case "models":
@@ -494,7 +491,7 @@ final class BoxModel: ObservableObject {
     func ask(_ a: [Any]) {
         let q = a.count > 0 ? a[0] as? String ?? "" : "", cmd = a.count > 1 ? a[1] as? String ?? "" : ""
         let retry = a.count > 2 && !((a[2] as? String ?? "").isEmpty) && (a[2] as? Bool) != false, details = a.count > 3 ? a[3] as? String : nil
-        removeParts { isCard($0) { if case .approval = $0 { return true }; if case .retry = $0 { return true }; if case .paused = $0 { return true }; if case .worker = $0 { return true }; if case .improve = $0 { return true }; if case .agent = $0 { return true }; return false } }
+        removeParts { isCard($0) { if case .approval = $0 { return true }; if case .retry = $0 { return true }; if case .paused = $0 { return true }; if case .worker = $0 { return true }; if case .agent = $0 { return true }; return false } }
         unpin(); unstream()
         let c = Card(kind: retry ? .retry(q: q, p: cmd, details: (details?.isEmpty ?? true) ? nil : details) : .approval(q: q, cmd: cmd))
         appendCard(c); setState("breathing"); setStatus("Waiting for you"); clockHold()
@@ -1181,10 +1178,6 @@ private struct CardView: View {
                   buttons: [("setup" + cid, "Open Setup", false, { m.post(["setup": true]) }),
                             ("wretry" + cid, "Retry", true, { m.mapCards { if $0.id == card.id { $0.retryBusy = true } }; m.setStatus("Starting…", true); m.post(["workerRetry": true]) })],
                   disabled: card.retryBusy ? ["wretry" + cid] : [])
-        case .improve:
-            Offer(m: m, card: card, title: "Help make Aurel better?", text: "When a task fails, send what you asked, the steps and why. Anonymous, cleaned first. Change it in Settings.",
-                  buttons: [("inot" + cid, "Not Now", false, { m.post(["improve": false]); m.setStatus("", true); m.goneCard(card.id) }),
-                            ("iyes" + cid, "Help Improve", true, { m.post(["improve": true]); m.setStatus("Thank you", true); m.goneCard(card.id) })])
         case .pick(let q, let options, let pics): PickCard(m: m, card: card, q: q, options: options, pics: pics)
         case .agent(let eyebrow, let title, let answer, let learned, let made, let actions, let cost, _):
             AgentCardView(m: m, card: card, eyebrow: eyebrow, title: title, answer: answer, learned: learned, made: made, actions: actions, cost: cost)

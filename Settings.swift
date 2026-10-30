@@ -1314,10 +1314,6 @@ private struct AccountSection: View {
                     Seg(options: [("auto", "Automatic"), ("never", "Never")], value: m.str("screen")) { m.set("screen", $0) } }
                 Row { _ in Title(b: "Hide from screen sharing", span: m.sharingUnavailable ? "On this macOS version, Aurel windows can appear in screen sharing." : nil)
                     Switch(on: m.bool("hideWhenSharing")) { m.set("hideWhenSharing", !m.bool("hideWhenSharing")) } }
-                Row { _ in Title(b: "Count me as a user", span: "Anonymous feature, timing and error counts.", info: "A random ID, with no task text, dictated words, files or screen content.")
-                    Switch(on: m.bool("stats")) { m.set("stats", !m.bool("stats")) } }
-                Row { _ in Title(b: "Help improve Aurel", span: "Anonymous reports when a task fails.", info: "Sends what you asked, the steps it took and why. Emails, numbers, file paths and anything typed for you are removed first.")
-                    Switch(on: m.bool("improve")) { m.set("improve", !m.bool("improve")) } }
             }
             H3(s: "Permissions").padding(.top, 30)
             Group_ {

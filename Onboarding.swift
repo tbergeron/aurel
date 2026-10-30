@@ -27,7 +27,7 @@ private struct SetupThemeKey: EnvironmentKey { static let defaultValue = SetupTh
 extension EnvironmentValues { var setupTheme: SetupTheme { get { self[SetupThemeKey.self] } set { self[SetupThemeKey.self] = newValue } } }
 func spring(_ s: Double, delay: Double = 0) -> Animation? { css(0.34, 1.56, 0.64, 1, s, delay: delay) }   // --spring
 
-let setupPages = ["welcome", "perms", "agents", "try", "mac", "text", "dictate", "point", "work", "improve", "done"]
+let setupPages = ["welcome", "perms", "agents", "try", "mac", "text", "dictate", "point", "work", "done"]
 
 // Rows: id, name, why, icon colour, glyph (viewBox 24).
 struct SetupRow { let id, name, why: String; let color: UInt32; let icon: [String] }
@@ -315,7 +315,7 @@ struct OnboardingView: View {
                 HStack {
                     if (setupPages.firstIndex(of: m.cur) ?? 0) >= 1 { PillButton(label: "Back", quiet: true, plain: true, height: 30, pad: 10) { m.back() } }
                     Spacer()
-                    if (setupPages.firstIndex(of: m.cur) ?? 0) < setupPages.firstIndex(of: "improve")! { PillButton(label: "Skip All", quiet: true, plain: true, height: 30, pad: 10) { m.go("improve") } }
+                    if (setupPages.firstIndex(of: m.cur) ?? 0) < setupPages.firstIndex(of: "done")! { PillButton(label: "Skip All", quiet: true, plain: true, height: 30, pad: 10) { m.go("done") } }
                 }.padding(.horizontal, 22).padding(.top, 18)
                 Spacer()
                 Dots(m: m).padding(.bottom, 24)
@@ -389,7 +389,6 @@ private struct PageView: View {   // .page: slides and un-blurs in from the righ
             }
         }
         case "work": WorkPage(m: m, on: active)
-        case "improve": Improve(m: m, on: active)
         default: Done(m: m, on: active)
         }
     }
@@ -1038,7 +1037,7 @@ private struct WorkPage: View {
                     SetupSeg(options: [("cheapest", "Cheapest"), ("balanced", "Balanced"), ("capable", "Most capable")], value: m.pstr("routing")) { m.set("routing", $0) }
                 }.padding(.horizontal, 14).padding(.vertical, 9)
             }.padding(.top, 14).rise(on, 4)
-            HStack(spacing: 10) { PillButton(label: "Skip", quiet: true) { m.go("improve") }; PillButton(label: "Next") { m.go("improve") } }.padding(.top, 26).rise(on, 5)
+            HStack(spacing: 10) { PillButton(label: "Skip", quiet: true) { m.go("done") }; PillButton(label: "Next") { m.go("done") } }.padding(.top, 26).rise(on, 5)
         }
     }
 }
@@ -1082,41 +1081,6 @@ private struct Crawl: View {   // the chip's progress bar
             let p = t.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.4) / 2.4
             GeometryReader { g in ZStack(alignment: .leading) { Rectangle().fill(Color.white(0.1)); Rectangle().fill(Color(hex: 0x0a84ff)).frame(width: g.size.width * (0.08 + 0.77 * (1 - pow(1 - p, 2)))) } }
         }.frame(height: 2)
-    }
-}
-
-private struct Improve: View {
-    @ObservedObject var m: OnboardingModel
-    let on: Bool
-    var body: some View {
-        let rows = [SetupRow(id: "a", name: "Only what failed", why: "What you asked, the steps Aurel took, and why it didn’t work.", color: 0x0a84ff, icon: ["M5 5h14v10H10l-5 4z"]),
-                    SetupRow(id: "b", name: "Anonymous", why: "A random ID. Never your name, your screen, your files or passwords.", color: 0x30d158, icon: [rect(5, 11, 14, 9, 2), "M8 11V8a4 4 0 0 1 8 0v3"]),
-                    SetupRow(id: "c", name: "Cleaned first", why: "Emails, numbers, file paths and anything typed for you are removed before it leaves your Mac.", color: 0x8e8e93,
-                             icon: ["M3 3l18 18", "M10.6 6.1A9.8 9.8 0 0 1 12 6c5 0 9 6 9 6a15 15 0 0 1-2.7 3.2M6.6 7.6A15 15 0 0 0 3 12s4 6 9 6a9 9 0 0 0 3.4-.7"])]
-        VStack(spacing: 0) {
-            Kicker(s: "Optional").rise(on, 0)
-            H2(s: "Help make Aurel better").rise(on, 1)
-            Sub(s: "When a task fails, Aurel can tell its maker what went wrong, so the next version gets it right. Change it anytime in Settings.").rise(on, 2)
-            ListCard { ForEach(rows.indices, id: \.self) { i in InfoRow(row: rows[i], index: i, shown: on) } }.padding(.top, 22).rise(on, 3)
-            HStack(spacing: 10) {
-                PillButton(label: "Not Now", quiet: true) { m.post(["do": "set", "k": "improve", "v": "false"]); m.go("done") }
-                PillButton(label: "Help Improve") { m.post(["do": "set", "k": "improve", "v": "true"]); m.go("done") }
-            }.padding(.top, 26).rise(on, 4)
-        }
-    }
-}
-private struct InfoRow: View {
-    let row: SetupRow; let index: Int; let shown: Bool
-    @Environment(\.setupTheme) var th
-    var body: some View {
-        HStack(spacing: 12) {
-            IconTile(color: row.color, icon: row.icon)
-            VStack(alignment: .leading, spacing: 0) { ST(s: row.name, weight: 500); ST(s: row.why, size: 12, color: th.fg3).padding(.top, 1) }.frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 14).padding(.vertical, 11)
-        .overlay(alignment: .top) { if index > 0 { Rectangle().fill(th.line).frame(height: 0.5) } }
-        .opacity(shown ? 1 : 0).offset(y: shown ? 0 : 8)
-        .animation(shown ? css(0.4, 0, 0.2, 1, 0.45, delay: 0.25 + Double(index) * 0.06) : nil, value: shown)
     }
 }
 

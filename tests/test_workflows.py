@@ -196,7 +196,7 @@ class WorkflowTests(unittest.TestCase):
         brain.ok = True
         brain.cmds = brain.ran = [aurel.WEB + ' read', aurel.WEB + ' fill 2 title']
         brain.observed = []
-        with patch.multiple(aurel, ping=lambda: None, fast=lambda _: None,
+        with patch.multiple(aurel, fast=lambda _: None,
                             front=lambda: ('Notes', ''), osa=lambda *a: '', screens=lambda: [],
                             describe=lambda *a: '', me_line=lambda: '', selection_context=lambda: '',
                             relevant_rules=lambda _: '', recent=lambda: [], screen_for=lambda *a: None,

@@ -347,20 +347,20 @@ class AgentTests(unittest.TestCase):
             workers.append(p)
         with patch.object(aurel, 'start_claude', return_value=workers[1]) as start, \
              patch.object(aurel, 'stop_claude'), patch.object(aurel, 'plan', return_value={'ok': True}), \
-             patch.object(aurel, 'say'), patch.object(aurel, 'report_error') as errors:
+             patch.object(aurel, 'say'):
             reply, _, _ = aurel.run('Fixture task', workers[0])
-        start.assert_called_once(); errors.assert_not_called()
+        start.assert_called_once()
         self.assertFalse(aurel.run.ok); self.assertEqual(aurel.run.why, 'stopped')
         self.assertIn('stopped', reply)
 
     def test_closing_a_move_with_a_closed_overlay_is_cancellation(self):
         move, _ = self.moving(); move.ready = True
         output = unittest.mock.Mock(); output.write.side_effect = BrokenPipeError
-        with patch('sys.stdout', output), patch.object(aurel, 'stop_workers') as stop, patch.object(aurel, 'report_error') as errors:
+        with patch('sys.stdout', output), patch.object(aurel, 'stop_workers') as stop:
             move.close()
             aurel.sys.stdout.close()   # say replaced the disconnected stream with devnull
         self.assertTrue(move.closed); self.assertTrue(move.done.is_set())
-        stop.assert_called_once(); errors.assert_not_called()
+        stop.assert_called_once()
 
     def test_a_thread_cancellation_signals_the_main_thread(self):
         with patch.object(aurel, 'STOPPING', False), \

@@ -23,7 +23,6 @@ tasks on the Mac. Output lines for the overlay: "· note", "▸ step", "✓ answ
 All requests and interrupted steps go to ~/.config/aurel/log.jsonl with their cost (live actions are marked).
 """
 import shlex
-import platform
 import fcntl
 import atexit, base64, difflib, hashlib, html, json, plistlib, shutil, threading, os, re, select, signal, stat, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 import unicodedata
@@ -41,17 +40,6 @@ PLACE, LOOK, SEARCH, READ, SHOW, REMEMBER, FORGET, TYPE, PLAY, QUEUE, ABOUT, SHO
 DRAW = shlex.quote(ME) + " --draw"
 MEMORY, RECENT = os.path.join(DIR, 'memory.md'), os.path.join(DIR, 'recent.jsonl')
 PREFS = os.path.join(DIR, 'settings.json')   # written by the Settings window
-# Anonymous counts, timings and error locations under a random install ID; never asks or screen content. Off in Settings → Privacy & Safety. Empty key = off.
-POSTHOG_KEY = os.environ.get('AUREL_POSTHOG_KEY', 'phc_mGpLLzJtYTToBF8uSkqkUxMMG9ANmQWKDBnpsRDmzy6P')   # public capture token; empty override disables
-APP_COMMIT = 'unknown'
-try:
-    APP_VERSION = Path(ME).with_name('VERSION').read_text().strip()
-except OSError:
-    try:
-        with open(Path(ME).parents[1] / 'Info.plist', 'rb') as f: info = plistlib.load(f)
-        APP_VERSION = info.get('CFBundleShortVersionString', 'unknown')
-        APP_COMMIT = info.get('AurelCommit', 'unknown')
-    except (OSError, ValueError): APP_VERSION = 'unknown'
 
 
 # About the user. Only a short name/answer-style line is always sent; category facts are attached when their
@@ -2176,9 +2164,6 @@ def fast(text):
             return r
         if replay.ran:   # it acted, then a step failed or its check contradicted: never another instant reply, the AI redoes it
             fast.failed = {'key': k, 'commands': replay.commands, 'output': replay.ran, 'failed_at': replay.failed_at}
-            if telemetry_enabled():
-                report_error('replay', shortcut=hashlib.sha256((install_id() + '\0' + k).encode()).hexdigest()[:16],
-                             failed_at=replay.failed_at)
             return None
     site = re.fullmatch(r'(?:search(?: up)?|google|look up) ([a-z0-9][\w.-]*) for (.+)', t)
     m = site or re.fullmatch(r'(?:search(?: up)?|google|look up)(?: for)? (.+)', t)
@@ -3459,41 +3444,8 @@ def watch(what, then, app='', words='', mode='', phrase=''):
     notify('Stopped watching after 3 hours.')
 
 
-def telemetry_enabled():
-    return bool(POSTHOG_KEY and pref('stats', True) and not os.environ.get('AUREL_DIR'))   # AUREL_DIR is the pure-test sandbox
-
-
-def install_id():
-    idf = os.path.join(DIR, 'id')
-    if not os.path.exists(idf):
-        os.makedirs(DIR, mode=0o700, exist_ok=True)
-        Path(idf).write_text(base64.b32encode(os.urandom(10)).decode())
-    return Path(idf).read_text()
-
-
-def posthog(event, props=None, stamp=()):
-    """One anonymous event (a random ID, no person profile). stamp: (text, file) written once it is sent."""
-    if not telemetry_enabled():
-        return
-    try:
-        body = json.dumps({'api_key': POSTHOG_KEY, 'event': event, 'distinct_id': install_id(), 'properties': {'$process_person_profile': False, 'version': APP_VERSION, 'commit': APP_COMMIT,
-                                                                                                            'macos': platform.mac_ver()[0], 'client': client(), **(props or {})}})
-        subprocess.Popen(['/bin/sh', '-c', 'curl -fsS -m 10 -H "Content-Type: application/json" -d "$1" https://us.i.posthog.com/i/v0/e/' + (' && printf %s "$2" > "$3"' if stamp else ''),
-                          'aurel-ping', body, *stamp],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)   # cancellation cannot kill it or slow the answer
-    except (OSError, ValueError):
-        pass   # telemetry never breaks an ask
-
-
-def ping():
-    day, stamp = time.strftime('%Y-%m-%d'), os.path.join(DIR, 'pinged')
-    if not telemetry_enabled() or (os.path.exists(stamp) and Path(stamp).read_text() == day):
-        return
-    posthog('used', stamp=(day, stamp))
-
-
 def clean(text):
-    """Failure reports carry no emails, numbers, file paths, link queries, long tokens or text typed for the user."""
+    """Error details carry no emails, numbers, file paths, link queries, long tokens or text typed for the user."""
     t = str(text).replace(ME, 'aurel').replace(HOME, '~')
     t = re.sub(r'((?:--type|--hands type (?:"[^"]*"|\S+)|--web fill \d+)\s+)("(?:[^"\\]|\\.)*"|\'[^\']*\')', r'\1<text>', t)
     t = re.sub(r'((?:--hands|--web) type-after\s+(?:"(?:[^"\\]|\\.)*"|\'[^\']*\'|\S+)\s+)("(?:[^"\\]|\\.)*"|\'[^\']*\')', r'\1<text>', t)
@@ -3505,19 +3457,6 @@ def clean(text):
     t = re.sub(r'(?<![:/.\w])(?:[\w.-]+/)+[\w.-]+', '<path>', t)
     t = re.sub(r'\b[A-Za-z0-9_-]{24,}\b', '<secret>', t)
     return re.sub(r'\d[\d\s().-]{4,}\d', '<number>', t)[:300]
-
-
-def report(task, reply, ran, secs, why):
-    """Settings → Help improve Aurel (off until the user says yes): a task that failed goes to the maker, cleaned."""
-    if POSTHOG_KEY and pref('improve', False) and os.environ.get('AUREL_LIVE') != '1':
-        posthog('task_failed', {'task': clean(task), 'reply': clean(reply), 'steps': [clean(c) for c in list(ran)[:12]], 'why': why,
-                                'secs': round(secs, 1), 'model': pref('model', 'haiku')})
-
-
-def report_error(kind, **props):
-    """Privacy-safe failures only: callers pass enums, indexes and code locations, never user text."""
-    if telemetry_enabled():
-        posthog('error', {'kind': kind, **props})
 
 
 TOO_LONG = r'\bcontext\b[\w\s-]{0,20}\blimit\b|\b(?:prompt|input|request) is too long\b'   # the request outgrew the model's context window
@@ -3540,32 +3479,8 @@ def failure_why(detail):
     return 'stopped'
 
 
-def report_worker_failure(worker, model, why):
-    if why == 'cancelled': return
-    setup = why in ('setup_needed', 'provider_needed', 'model_missing', 'server_rejected', 'signed_out', 'too_long', 'plan_limit', 'rate_limited', 'offline', 'unavailable', 'sandbox')
-    report_error('setup' if setup else 'worker_exit', worker=worker, model=model if model in ('haiku', 'sonnet', 'opus') else 'custom', why=why)
-
-
-def exception_error(exc_type, tb, value=None, *, kind='exception', **props):
-    ours = None   # the last Aurel line on the way down: a crash inside subprocess.py still says which call failed
-    while tb and tb.tb_next:
-        if tb.tb_frame.f_code.co_filename == ME: ours = tb
-        tb = tb.tb_next
-    if tb and tb.tb_frame.f_code.co_filename == ME: ours = tb
-    frame = tb.tb_frame if tb else None
-    errno = value.errno if isinstance(value, OSError) else None   # OSError's own field: never a custom attribute that could throw here
-    report_error(kind, **props, exception=getattr(exc_type, '__name__', 'Exception'),
-                 file=os.path.basename(frame.f_code.co_filename) if frame else '',
-                 line=tb.tb_lineno if tb else 0, function=frame.f_code.co_name if frame else '',
-                 at_line=ours.tb_lineno if ours else 0, at_function=ours.tb_frame.f_code.co_name if ours else '',
-                 **({'errno': errno} if isinstance(errno, int) else {}))
-
-
 def install_exception_hooks():
-    previous_sys, previous_thread = sys.excepthook, getattr(threading, 'excepthook', None)
-    def system_hook(exc_type, value, tb):
-        exception_error(exc_type, tb, value)
-        previous_sys(exc_type, value, tb)
+    previous_thread = getattr(threading, 'excepthook', None)
     def thread_hook(args):
         if not threading.main_thread().is_alive(): return
         # CPython stops executors before the main thread is marked dead.
@@ -3574,9 +3489,7 @@ def install_exception_hooks():
         if issubclass(args.exc_type, BrokenPipeError) and stdout_closed():
             sys.stdout = open(os.devnull, 'w')
             return stop_workers()
-        exception_error(args.exc_type, args.exc_traceback, args.exc_value)
         if previous_thread: previous_thread(args)
-    sys.excepthook = system_hook
     if previous_thread: threading.excepthook = thread_hook
 
 
@@ -3586,43 +3499,6 @@ def stdout_closed():
         return bool(poll.poll(0))
     except (OSError, ValueError, TypeError):
         return False
-
-
-def dictation_event(mode, secs, cleanup, fallback, timed_out, insert):
-    posthog('dictation', {'mode': mode if mode in ('verbatim', 'cleanup') else 'verbatim',
-                          'secs': round(max(0, float(secs)), 3), 'cleanup_used': bool(cleanup),
-                          'fell_back': bool(fallback), 'timed_out': bool(timed_out),
-                          'insert': insert if insert in ('ok', 'no box', 'failed') else 'failed'})
-
-
-def tool_kinds(commands):
-    """Command classes only, never their arguments."""
-    kinds = []
-    for command in commands:
-        helpers = re.findall(r'--(place|show|hands|web|draw|look|search|read|front|watch|pick|play|queue|type|window)\b', str(command))
-        if helpers:
-            found = helpers
-        else:
-            try: tokens = shlex.split(str(command).split('=>', 1)[0])
-            except ValueError: tokens = []
-            found = [os.path.basename(tokens[0])] if tokens else []
-        for kind in found:
-            if kind and kind not in kinds: kinds.append(kind)
-    return kinds[:20]
-
-
-def ask_done(row):
-    if row.get('_telemetry_sent'):
-        return
-    status = row.get('status')
-    status = 'ok' if status in ('completed', 'handed_off') else 'failed' if status in ('failed', 'crashed') else 'cancelled'
-    steps = row.get('steps', 0)
-    posthog('ask_done', {'path': row.get('path', 'instant' if row.get('model') == 'instant' else 'model'),
-                         'model': row.get('model', 'unknown'), 'secs': round(max(0, float(row.get('secs', 0))), 1),
-                         'steps': len(steps) if isinstance(steps, (list, tuple)) else max(0, int(steps or 0)),
-                         'tools': tool_kinds(row.get('ran', [])), 'status': status,
-                         'escalated': bool(row.get('escalated'))})
-    row['_telemetry_sent'] = True
 
 
 def say(tag, text):   # one line per message; an answer's own line breaks (lists, display math) travel as U+2028
@@ -3678,7 +3554,7 @@ def begin_turn(task):
     checkpoint()
 
 
-def end_turn(status='cancelled', emit=True):
+def end_turn(status='cancelled'):
     if TURN and TURN.get('status') == 'running':
         now = time.monotonic()
         for step in TURN['step_times']:
@@ -3686,8 +3562,6 @@ def end_turn(status='cancelled', emit=True):
                 step.update(secs=round(now - step.pop('_start', now), 3), status=status)
         TURN['secs'] = round(time.time() - TURN['_started'], 1)
         checkpoint(status=status)
-        if emit:
-            ask_done(TURN)
 
 
 atexit.register(end_turn)
@@ -3707,7 +3581,6 @@ def log_turn(task, reply, started, cost=0, steps=0, ran=(), pics=0, *, model=Non
         TURN.update(row, status='completed' if status == 'running' else status,
                     confirmed=not os.environ.get('AUREL_COMMIT') or os.path.exists(os.environ['AUREL_COMMIT']))
         append_log({k: v for k, v in TURN.items() if not k.startswith('_')})
-        ask_done(TURN)
     else:
         append_log(row)
 
@@ -4850,10 +4723,9 @@ class Agents:
                         self.stop_process(row['id'])
                         if self.idle is row: self.idle = None
                     else: self.revive(row)
-        except (OSError, ValueError, TypeError) as error:
+        except (OSError, ValueError, TypeError):
             with self.lock:
                 if self.processes.get(row['id']) is p:
-                    exception_error(type(error), error.__traceback__, error, kind='worker_exception', worker='claude', stage='agent_read')
                     self.revive(row)
 
     def revive(self, row):
@@ -5265,7 +5137,7 @@ def run(task, p=None, shots=(), auto_work=False, *, request=None, main_only=Fals
     run.handoff, run.handoffs = None, []
     run.observed = []
     run.work = False   # set before the Local path too: main() reads run.work after every client
-    run.why = ''   # why it failed, one fixed word for PostHog
+    run.why = ''   # why it failed, one fixed word that picks the message
     pictures = bool(shots) and pref('claudeSees', False)   # Settings: the local model can't see, so an ask with a picture (a Point mark, a screenshot) can go to Claude
     if client() == 'local' and not pictures and (pref('bigAsks', 'local') != 'claude' or not big_ask(task)):   # Settings: big asks can go to Claude Code instead
         return run_local(task, shots, request=request)
@@ -5466,7 +5338,7 @@ def run(task, p=None, shots=(), auto_work=False, *, request=None, main_only=Fals
         if not wait_commit(): return '', None, steps
         run.handoff = move.pending; run.handoffs = [run.handoff]
         if not completed: cost = None   # the interrupted CLI did not provide terminal usage; zero would be misleading
-        end_turn('handed_off', emit=False)
+        end_turn('handed_off')
         print('⤴ ' + json.dumps(run.handoff, ensure_ascii=False), flush=True)
     if run.handoff:
         run.ok = True
@@ -6728,17 +6600,6 @@ def dictate_cleanup_wait():
 
 def main():
     args = sys.argv[1:]
-    if len(args) == 8 and args[:2] == ['--telemetry', 'dictation']:
-        try: dictation_event(args[2], args[3], args[4] == '1', args[5] == '1', args[6] == '1', args[7])
-        except (TypeError, ValueError): pass
-        return
-    if len(args) == 5 and args[:3] == ['--telemetry', 'error', 'worker_exit']:
-        return report_error('worker_exit', worker=args[3] if args[3] in ('python', 'claude', 'local') else 'python',
-                            exit=int(args[4]) if args[4].lstrip('-').isdigit() else -1)
-    if args == ['--telemetry', 'error', 'native', 'mic_start']:
-        return report_error('native', stage='mic_start')
-    if len(args) == 4 and args[:2] == ['--telemetry', 'idea'] and args[2] in ('shown', 'clicked') and args[3].isdigit():   # "Ideas when I'm away": which one, never its text
-        return posthog('idea', {'action': args[2], 'index': int(args[3])})
     if args == ['--draw', '--help']:
         return print(DRAW_HELP if pref('draw', True) else 'Screen drawings are off')
     if args[:1] == ['--draw']:
@@ -6775,7 +6636,7 @@ def main():
     if args[:1] == ['--watch'] and (len(args) in (5, 6) and args[3] in ('gone', 'shows', 'settled') or len(args) in (3, 4) and args[1] == 'cmd'):
         os.makedirs(WATCHING, exist_ok=True)   # the watcher runs on after this ask ends
         # This ask's AUREL_* vars would make the follow-up request a refused nested ask; keep only install-wide ones.
-        env = {k: v for k, v in os.environ.items() if not k.startswith('AUREL_') or k in ('AUREL_DIR', 'AUREL_APP', 'AUREL_CLAUDE', 'AUREL_POSTHOG_KEY')}
+        env = {k: v for k, v in os.environ.items() if not k.startswith('AUREL_') or k in ('AUREL_DIR', 'AUREL_APP', 'AUREL_CLAUDE')}
         w = subprocess.Popen([sys.executable, ME, '--watching', *args[1:]], start_new_session=True, env=env,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         Path(WATCHING, str(w.pid)).write_text(' '.join(args[1:]))
@@ -6904,14 +6765,13 @@ def main():
         os.makedirs(DIR, exist_ok=True)
         started = time.time()
         begin_turn(' '.join(args[1:]))
-        ping()
         allow_focus(' '.join(args[1:]))
         r = fast(' '.join(args[1:]))
         if not r:
             checkpoint(status='not_handled')
             sys.exit(1)
-        if r.startswith('The user said no.'): end_turn('cancelled', emit=False)
-        elif failed_action_reply(r, bool(getattr(fast, 'cmds', []))): end_turn('failed', emit=False)
+        if r.startswith('The user said no.'): end_turn('cancelled')
+        elif failed_action_reply(r, bool(getattr(fast, 'cmds', []))): end_turn('failed')
         remember_turn(' '.join(args[1:]), r, getattr(fast, 'shortcut', None))
         log_turn(' '.join(args[1:]), r, started, model='instant',
                  path='shortcut' if getattr(fast, 'shortcut', None) else 'instant', attempt_usd=[])
@@ -7053,7 +6913,6 @@ def main():
     if not reading_started and not selection_context() and pref('screen', 'auto') != 'never':
         reading.start()
         reading_started = True
-    ping()
     os.environ['AUREL_RELAY_OWNER'] = str(os.getpid())
     save_request(os.environ['AUREL_ASK'], task)
     if warm: warm.relaying = True
@@ -7076,8 +6935,8 @@ def main():
         quick = ' '.join(done + [quick])
         if warm:
             stop_claude(warm)
-        if quick_cancelled: end_turn('cancelled', emit=False)
-        elif quick_failed: end_turn('failed', emit=False)
+        if quick_cancelled: end_turn('cancelled')
+        elif quick_failed: end_turn('failed')
         remember_turn(task, quick, getattr(fast, 'shortcut', None))
         log_turn(task, quick, t, model='instant',
                  path='shortcut' if getattr(fast, 'shortcut', None) else 'instant', attempt_usd=[])
@@ -7163,7 +7022,7 @@ def main():
         if getattr(run, 'why', '') not in ('', 'cancelled'): return False
         if getattr(run, 'why', '') != 'cancelled' and not os.path.exists(os.path.join(os.environ['AUREL_ASK'], 'declined')): return False
         run.ok, run.why = False, 'cancelled'
-        end_turn('cancelled', emit=False)
+        end_turn('cancelled')
         log_turn(TURN.get('task', task), reply, t, cost, steps, run.ran, model=model, attempt_usd=attempt_usd)
         say('!', reply)
         return True
@@ -7234,18 +7093,15 @@ def main():
         learned = learn(learned_task, run.cmds, reply)
         workflow = learned or workflow
         if learned is True: learned_key, learned_say = plain(learned_task), learned_task
-    if (fix or failed_shortcut and not failed_replay) and turns: report(turns[-1]['q'], '', (), 0, 'the user said it was wrong')   # the answer is the user's own content (screen, mail, files), not why it failed
     failed = failed_action_reply(reply, run.work)
     final_ran = list(failed_replay.get('output', ())) + run.ran if failed_replay else run.ran
-    if not run.ok or failed: report(task, reply, final_ran, time.time() - t, 'error' if not run.ok else 'could not do it')
-    if not run.ok: report_worker_failure(client(), model, getattr(run, 'why', '') or 'other')
     learned_entry = skills().get(learned_key) if learned_key else None
     learned_turn = {'key': learned_key, 'commands': learned_entry['cmds'],
                     'output': [f'{o.get("action", "")} => {str(o.get("result", ""))[:400]}' for o in run.observed] or [reply[:400]]} if learned_entry else None
     turn = remember_turn(task, reply, learned_turn)
     if turn and pref('saveChats', True) and plain_chat(run.ok, failed, replacement, task, confirmed_task, final_ran):
         update_chats(turn={k: turn[k] for k in ('t', 'q', 'a')}, previous=turns[-1] if turns else None)
-    if not run.ok or failed: end_turn('failed', emit=False)
+    if not run.ok or failed: end_turn('failed')
     log_turn(TURN.get('task', task), reply, t, cost, steps, final_ran, len(images or ()),
              model=model, escalated=escalated, escalate_why=escalate_why, attempt_usd=attempt_usd)
     # clicks inside an app pull it forward; give the user back the app the user was in unless the user asked to go somewhere
@@ -7259,10 +7115,6 @@ def main():
     # "When I say focus mode, …" saved: a green Learned pill
     said = shortcut or learned_say   # a new shortcut, named or learned from these words
     tip(reply, f'Learned: Say “{said}” any time.' if said else 'Learned: Procedure saved for next time.' if workflow else taught[1].strip() if taught else '')
-    asked = os.path.join(DIR, 'improve-asked')   # people who updated never saw setup's question: ask once a day after a task that worked, until they answer
-    if run.ok and not failed and POSTHOG_KEY and not pref('improveAsked', False) and os.environ.get('AUREL_UI') == '1' \
-            and not (os.path.exists(asked) and Path(asked).read_text() == time.strftime('%Y-%m-%d')):
-        Path(asked).write_text(time.strftime('%Y-%m-%d')); say('!', 'improve')
     if os.environ.get('AUREL_UI') != '1':   # typed from the menu bar: no overlay, so a notification
         osa('on run argv\ndisplay notification (item 1 of argv) with title "Aurel"\nend run', reply)
 
@@ -7279,13 +7131,12 @@ def run_main():
         try:
             end_turn('crashed')
         finally:
-            exception_error(type(error), error.__traceback__, error, kind='worker_exit', worker='python')
             traceback.print_exception(type(error), error, error.__traceback__)
-            sys.exit(70)   # handled and reported; Swift reports all other abnormal exits
+            sys.exit(70)
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] != ['--selftest']: install_exception_hooks()   # a developer check run against their own settings is not a user crash
+    if sys.argv[1:] != ['--selftest']: install_exception_hooks()
     if sys.argv[1:] == ['--selftest']:
         assert label('Bash', {'command': 'open -a "Visual Studio Code" x'}) == 'Opening Visual Studio Code'
         assert label('Bash', {'command': 'open "https://www.google.com/search?q=x"'}) == 'Opening google.com'
@@ -7333,7 +7184,7 @@ if __name__ == '__main__':
             subprocess.run = lambda *a, **k: None   # selftest: never open a browser
             assert fast(said) == done, (said, fast(said))
         assert re.findall(r'--remember\s+["\']([^"\']+)', f'{REMEMBER} "open means front"') == ['open means front']
-        assert label('Bash', {'command': f'{FRONT} "Google Chrome" "posthog"'}) == 'Bringing Google Chrome forward'
+        assert label('Bash', {'command': f'{FRONT} "Google Chrome" "inbox"'}) == 'Bringing Google Chrome forward'
         assert picks()['routing'][1] and 'safe' in switches()
         assert shortcut_commands('work mode', [f'{PLACE} "Orca" full monitor; {PLACE} "Google Chrome" full laptop && open -g -a Spotify'])[0] == f"{PLACE} Orca full monitor + 'Google Chrome' full laptop"
         assert shortcut_commands('work mode', [f'{PLACE} "Orca" full monitor | head']) is None

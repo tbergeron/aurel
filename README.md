@@ -201,12 +201,6 @@ Aurel has to stay fast and nearly free, so new features must fit under these lim
 - System prompt: under 10,000 characters in source and at most 10,050 with the installed helper path. Every ask pays for it, and tests enforce both limits.
 - Anything that waits or runs in the background: $0 while it waits. AI only to set it up and to act at the end.
 
-## Anonymous usage
-
-Aurel sends a random ID (made on your Mac, not tied to you) with daily use, ask outcomes, feature names, timings, dictation outcomes, and code locations for errors. It never sends task text, dictated words, file contents, paths, or screen content. Turn it off in Settings → Privacy & Safety → Count me as a user.
-
-If you say yes to **Help improve Aurel** (asked once, off until you do), a task that fails sends what you asked, the steps Aurel took and why it failed, under the same random ID. Emails, numbers, file paths, link details and anything typed for you are removed on your Mac first. Turn it off in Settings → Privacy & Safety → Help improve Aurel.
-
 ## Files
 
 - `Aurel.swift`: the app (hotkey, speech, overlay, onboarding window)
@@ -222,6 +216,6 @@ MIT. See `LICENSE`. `ui/orbs.js` is from [thinking-orbs](https://github.com/Jaku
 
 ## Contributing
 
-Run regressions with a scratch `AUREL_DIR` and use `tests/ui.html` and `tests/settings.html` for mock-bridge UI checks. Keep personal agent settings, credentials and runtime state out of commits. Anonymous usage telemetry uses a public PostHog capture token. Set `AUREL_POSTHOG_KEY` to override it (an empty value disables telemetry), or turn off Count me as a user in Settings.
+Run regressions with a scratch `AUREL_DIR` and use `tests/ui.html` and `tests/settings.html` for mock-bridge UI checks. Keep personal agent settings, credentials and runtime state out of commits.
 
 Hands: ideas and some logic adapted from Plip (github.com/hussainn7/plip-oss, MIT). Background key authentication and menu-shortcut presses follow Cua Driver (github.com/trycua/cua, MIT).

@@ -46,18 +46,18 @@ class OnboardingNativeTests(unittest.TestCase):
         out = native_ui(self, ''.join(helpers) + SETUP + script)
         return json.loads(out.strip().splitlines()[-1])
 
-    def test_skip_all_stays_at_top_right_and_jumps_to_improve(self):
+    def test_skip_all_stays_at_top_right_and_jumps_to_done(self):
         out = self.page('''var landed: [String] = []
             for client in ["claude", "local"] {
                 plan(true, "", client, "Ready")
-                for p in setupPages.prefix(upTo: setupPages.firstIndex(of: "improve")!) { m.go(p); m.go("improve"); landed.append(m.cur) }   // Skip All
+                for p in setupPages.prefix(upTo: setupPages.firstIndex(of: "done")!) { m.go(p); m.go("done"); landed.append(m.cur) }   // Skip All
             }
             done(Array(Set(landed)))''')
-        self.assertEqual(out['result'], ['improve'])
-        self.assertNotIn({'do': 'done'}, out['posts'])   # it skips the tour, not the closing pages
+        self.assertEqual(out['result'], ['done'])
+        self.assertNotIn({'do': 'done'}, out['posts'])   # it skips the tour, not the closing page
         bar = between(view('OnboardingView'), 'HStack {', '}.padding(.horizontal, 22)')
         self.assertLess(bar.index('Spacer()'), bar.index('"Skip All"'))   # top right, after Back
-        self.assertIn('if (setupPages.firstIndex(of: m.cur) ?? 0) < setupPages.firstIndex(of: "improve")! { PillButton(label: "Skip All", quiet: true, plain: true, height: 30, pad: 10) { m.go("improve") } }', bar)
+        self.assertIn('if (setupPages.firstIndex(of: m.cur) ?? 0) < setupPages.firstIndex(of: "done")! { PillButton(label: "Skip All", quiet: true, plain: true, height: 30, pad: 10) { m.go("done") } }', bar)
 
     def test_every_permission_row_can_be_allowed_or_shows_its_check(self):
         for granted in (False, True):
@@ -184,7 +184,7 @@ m.clicked(CGPoint(x: 10, y: 10)); precondition(posts.last?["do"] == "cancelRecor
             m.go("try"); m.back(); path.append(m.cur)
             plan(true, "", "claude", "Signed in."); m.go("work"); path.append(m.cur)
             done(path)''')
-        self.assertEqual(out['result'], ['improve', 'point', 'perms', 'work'])
+        self.assertEqual(out['result'], ['done', 'point', 'perms', 'work'])
         self.assertIn('ForEach(setupPages.filter { !m.skip($0) }', view('Dots'))
 
     def test_feature_pages_show_what_they_teach(self):
@@ -204,10 +204,6 @@ m.clicked(CGPoint(x: 10, y: 10)); precondition(posts.last?["do"] == "cancelRecor
         self.assertIn('Haiku for quick asks.', work)
         self.assertIn('{ m.set("routing", $0) }', work)
         self.assertNotIn('longAsks', SETUP_SOURCE)   # long asks always move: no setting
-        improve = view('Improve')
-        self.assertIn('Anonymous', improve)
-        self.assertIn('PillButton(label: "Help Improve") { m.post(["do": "set", "k": "improve", "v": "true"]); m.go("done") }', improve)   # the main action
-        self.assertIn('PillButton(label: "Not Now", quiet: true)', improve)
 
     def test_done_page_says_what_is_missing_and_ends_setup(self):
         out = self.page('''var seen = [missing(m)]
