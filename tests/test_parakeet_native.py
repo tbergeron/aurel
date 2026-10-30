@@ -1,4 +1,4 @@
-"""Parakeet engine (Atticus.swift `// MARK: Parakeet` section) compiled alone against a scratch ATTICUS_DIR and a fake helper."""
+"""Parakeet engine (Aurel.swift `// MARK: Parakeet` section) compiled alone against a scratch AUREL_DIR and a fake helper."""
 import json
 import os
 from pathlib import Path
@@ -12,9 +12,9 @@ from unittest.mock import patch
 from tests import run_swift
 
 ROOT = Path(__file__).resolve().parents[1]
-HELPER = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "atticus-parakeet/release/atticus-parakeet"   # build.sh's build
+HELPER = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "aurel-parakeet/release/aurel-parakeet"   # build.sh's build
 
-# Speaks atticus-parakeet's protocol with no model: "serve" answers each request with its sample count and first sample.
+# Speaks aurel-parakeet's protocol with no model: "serve" answers each request with its sample count and first sample.
 FAKE = f"""#!{sys.executable} -I
 import json, struct, sys
 mode, version = sys.argv[1], sys.argv[2]
@@ -31,7 +31,7 @@ while head := sys.stdin.buffer.read(4):
 
 
 def engine():
-    source = (ROOT / "Atticus.swift").read_text()
+    source = (ROOT / "Aurel.swift").read_text()
     prefs = source[source.index("enum Prefs"):source.index("func applySharing(")]
     parakeet = source[source.index("// MARK: Parakeet"):source.index("// MARK: end Parakeet")]
     return "import Cocoa\nimport AVFoundation\nlet controlKey = 1, optionKey = 2\n" + prefs + parakeet
@@ -40,10 +40,10 @@ def engine():
 @unittest.skipUnless(sys.platform == "darwin", "macOS Swift regression")
 class ParakeetNativeTests(unittest.TestCase):
     def scratch(self, helper=None):
-        root = Path(tempfile.mkdtemp(prefix="atticus-parakeet-")); self.addCleanup(shutil.rmtree, root, True)
+        root = Path(tempfile.mkdtemp(prefix="aurel-parakeet-")); self.addCleanup(shutil.rmtree, root, True)
         if helper is None:
             helper = root / "fake"; helper.write_text(FAKE); helper.chmod(0o755)
-        p = patch.dict(os.environ, {"ATTICUS_DIR": str(root), "ATTICUS_PARAKEET": str(helper)}); p.start(); self.addCleanup(p.stop)
+        p = patch.dict(os.environ, {"AUREL_DIR": str(root), "AUREL_PARAKEET": str(helper)}); p.start(); self.addCleanup(p.stop)
         return root
 
     def test_request_audio_and_catalog(self):

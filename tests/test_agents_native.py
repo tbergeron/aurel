@@ -1,4 +1,4 @@
-"""Deferred native/WebKit checks. Do not run on the user's Mac; VM only when authorized."""
+"""Deferred native checks. Do not run on the user's Mac; VM only when authorized."""
 import os
 import plistlib
 from pathlib import Path
@@ -8,12 +8,14 @@ import sys
 import tempfile
 import unittest
 
+from tests import app_swiftc, swiftc_with_ui
+
 ROOT=Path(__file__).resolve().parents[1]
 
 
 def native_fixture(body, real_mini=False):
     """The real agent panels with stubbed app, prefs and worker, then a fixture `body`."""
-    source=(ROOT/'Atticus.swift').read_text()
+    source=(ROOT/'Aurel.swift').read_text()
     panels=source[source.index('// MARK: - Agent panels'):source.index('// First-run window')].replace('NSWorkspace.shared.accessibilityDisplayShouldReduceMotion','fixtureReduced')
     show=source[source.index('    func show()',source.index('final class App')):source.index('    func hide(after',source.index('final class App'))]
     lease=source[source.index('    static func screenLease()'):source.index('    static func fingerprint',source.index('    static func screenLease()'))]
@@ -23,7 +25,6 @@ def native_fixture(body, real_mini=False):
     mini=source[source.index('final class PassView'):source.index('\n}\n',source.index('final class MiniScreen'))+3]
     harness='''import Cocoa
 import Carbon
-import WebKit
 import SwiftUI
 import AVFoundation
 import EventKit
@@ -33,7 +34,7 @@ func viewCheck(_ value:Any?,_ done:(Any?,Error?)->Void){done(value,nil)}   // th
 var fixtureTelemetry:[[String]]=[]
 func telemetry(_ args:[String]){fixtureTelemetry.append(args)}
 enum Prefs {
- static let path=ProcessInfo.processInfo.environment["ATTICUS_DIR"]!+"/settings.json"
+ static let path=ProcessInfo.processInfo.environment["AUREL_DIR"]!+"/settings.json"
  static var d:[String:Any]=[:]
  static func set(_ k:String,_ v:Any){d[k]=v}
  static func bool(_ k:String)->Bool{d[k] as? Bool ?? false}
@@ -41,6 +42,7 @@ enum Prefs {
  static func num(_ k:String)->Double{(d[k] as? NSNumber)?.doubleValue ?? 0}
 }
 final class KeyPanel:NSPanel{override var canBecomeKey:Bool{true}}
+final class FlippedView:NSView{override var isFlipped:Bool{true}}
 final class MiniScreen {
  let clip=NSView();var forcePreview=false;var target:[String:Any]?,timer:Timer?,publish:(([String:Any])->Void)?
  func reset(){target=nil};func receive(_ value:[String:Any]){target=value};func stopCapture(clear:Bool){};func finish(){};func open(){};func layout(_ value:[String:Any]){}
@@ -53,12 +55,14 @@ func axAttribute(_ e:AXUIElement,_ key:String)->CFTypeRef?{nil}
 let calendar=EKEventStore()
 final class MeetingStub {var running=false;func open(){};func acceptAgent(_ row:[String:Any]){};func showAgentPrep(_ row:[String:Any]){}}
 let meeting=MeetingStub()
+final class LocalAI{static let shared=LocalAI();func address()->String{""}}   // the local model server: not started here
+enum Dock{static func show(_ w:NSWindow){w.makeKeyAndOrderFront(nil)};static func update(){}}   // the Dock icon and menu: not here
 final class OnboardingStub{var allowed:[String]=[];func allow(_ need:String,app:String){allowed.append(need)}}   // setup asks: what Allow opened
 let onboarding=OnboardingStub()
 enum Onboarding{static var on=false;static func granted(_ need:String,app:String)->Bool{on}}
 final class EngineStub{var isRunning=false}
 final class AppStub{
- let web=WKWebView()
+ let boxView=FlippedView()   // NSHostingView is flipped, as the page's WKWebView was
  let panel=KeyPanel(contentRect:NSRect(x:40,y:40,width:340,height:120),styleMask:[.nonactivatingPanel,.borderless],backing:.buffered,defer:false)
  let mini=MiniScreen(),engine=EngineStub();var busy=false,composing=false,pinned=false,stuck=false,dragging=false,hovering=false,pillOn=false,gen=0,escRef:EventHotKeyRef?,agentCard=""
  var calls:[String]=[],defaultKeys:[EventHotKeyRef]=[],allowUntil=Date.distantPast,allowUserApp=false
@@ -83,21 +87,21 @@ enum Hands {
  static func checkStopped()throws{}
 ''' + lease + '''
 }
-''' + source[source.index('func applySharing('):source.index('func profileName(')] + source[source.index('func callJS('):source.index('func currentRequestScreen(')] + panels + body
+''' + source[source.index('func applySharing('):source.index('func profileName(')] + source[source.index('// The screen under the mouse, else the main one.'):source.index('func currentRequestScreen(')] + panels + body
     if real_mini:   # the real live-window stream, for screenshots that show it
         stub=harness[harness.index('final class MiniScreen {'):harness.index('\n}\n',harness.index('final class MiniScreen {'))+3]
         harness=harness.replace(stub,mini+'func axWindowNumber(_ e:AXUIElement)->NSNumber?{nil}\n').replace('import Cocoa\n','import Cocoa\nimport ScreenCaptureKit\nimport CoreMedia\n',1)
     return harness
 
 
-def run_fixture(test,body,marker,real_mini=False):
+def run_fixture(test,body,marker,real_mini=False,ui=False):   # ui: also compile the native box, Settings and setup views
     with tempfile.TemporaryDirectory() as folder:
         root=Path(folder); fixture=root/'agents.swift';fixture.write_text(native_fixture(body,real_mini))
         # No real Claude, connector, audio, or app actions; all native UI stays in the VM.
         resources=root/'resources';resources.mkdir();(resources/'ui').symlink_to(ROOT/'ui')
         (resources/'tests').mkdir();(resources/'tests'/'native_agent_worker.py').write_text('import sys\nfor line in sys.stdin: pass\n')
-        binary=root/'agents';env={**os.environ,'ATTICUS_DIR':str(root),'ATTICUS_ASK':str(root)}
-        build=subprocess.run(['swiftc','-O',str(fixture),'-o',str(binary)],env=env,capture_output=True,text=True)
+        binary=root/'agents';env={**os.environ,'AUREL_DIR':str(root),'AUREL_ASK':str(root)}
+        build=subprocess.run(swiftc_with_ui(fixture,binary,'-O') if ui else ['swiftc','-O',str(fixture),'-o',str(binary)],env=env,capture_output=True,text=True)
         test.assertEqual(build.returncode,0,build.stderr)
         result=subprocess.run([str(binary),str(resources)],env=env,capture_output=True,text=True,timeout=120)
         test.assertEqual(result.returncode,0,result.stdout+result.stderr)
@@ -157,8 +161,8 @@ second.terminate();print("supervisor restart ok")''','supervisor restart ok')
 let agentsUI=AgentPanels()
 let id="11111111111111111111111111111111"
 agentsUI.receive(["event":"state","agent":["id":id,"title":"Flight","status":"running","created":Date().timeIntervalSince1970]])
-app.panel.contentView=app.web;app.panel.setFrame(NSRect(x:80,y:80,width:340,height:180),display:true);app.web.frame=app.panel.contentView!.bounds
-app.web.loadHTMLString("<body style='background:#222;color:white'><h1>Research task</h1><p>Reading a source</p></body>",baseURL:nil);app.panel.orderFrontRegardless()
+app.panel.contentView=app.boxView;app.panel.setFrame(NSRect(x:80,y:80,width:340,height:180),display:true);app.boxView.frame=app.panel.contentView!.bounds
+let research=NSTextField(labelWithString:"Research task · Reading a source");research.frame=NSRect(x:16,y:120,width:300,height:30);app.boxView.addSubview(research);app.panel.orderFrontRegardless()
 var stage=0,tries=0,at=Date(),flight:NSWindow?,origin=NSRect.zero
 func fail(_ text:String)->Never{print(text);fflush(stdout);agentsUI.process?.terminate();exit(1)}
 Timer.scheduledTimer(withTimeInterval:0.05,repeats:true){_ in
@@ -216,7 +220,7 @@ Timer.scheduledTimer(withTimeInterval:0.15,repeats:true){_ in
  }else if stage>=2{
   stage+=1
   if stage==5{require(app.calls.filter{$0=="agentDefaultAction"}.count==1,"No-card Return triggered an agent action");app.defaultKey(true);other=KeyPanel(contentRect:NSRect(x:300,y:300,width:180,height:100),styleMask:[.nonactivatingPanel,.titled],backing:.buffered,defer:false);other?.makeKeyAndOrderFront(nil)}
-  if stage==7{require(app.defaultKeys.isEmpty,"Main card captured Return from another Atticus window");other?.orderOut(nil)}
+  if stage==7{require(app.defaultKeys.isEmpty,"Main card captured Return from another Aurel window");other?.orderOut(nil)}
   if stage==9{require(app.defaultKeys.count==2,"Main card default did not recover after closing another window");app.defaultKey(false);agentsUI.process?.terminate();print("native Return checks ok");exit(0)}
  }
 }
@@ -226,10 +230,10 @@ nsapp.run()''','native Return checks ok')
         run_fixture(self,'''let nsapp=NSApplication.shared;nsapp.setActivationPolicy(.accessory)
 let agentsUI=AgentPanels()
 func require(_ value:Bool,_ message:String){if !value{print(message);fflush(stdout);agentsUI.process?.terminate();exit(1)}}
-let file=ProcessInfo.processInfo.environment["ATTICUS_DIR"]!+"/move-fixture"
+let file=ProcessInfo.processInfo.environment["AUREL_DIR"]!+"/move-fixture"
 require(app.moveRef==nil,"Move shortcut held with nothing to move")
 NSWorkspace.shared.runningApplications.first{$0.bundleIdentifier=="com.apple.finder"}?.activate(options:[])
-app.busy=true;app.agentMoveFile=file;app.askFile="/tmp/atticus-fixture-pending"
+app.busy=true;app.agentMoveFile=file;app.askFile="/tmp/aurel-fixture-pending"
 require(app.moveRef != nil,"Move shortcut did not register while the ask can move")
 func press(){DispatchQueue.global().async{   // real modifier downs and ups: flags on a lone Return leave Control held for later tests
  let source=CGEventSource(stateID:.privateState),held:CGEventFlags=[.maskControl,.maskAlternate]
@@ -253,21 +257,21 @@ nsapp.run()''','move shortcut checks ok')
 
     def test_complete_app_compiles_and_native_selftest(self):
         with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder);binary=root/'Atticus'
-            env={**os.environ,'ATTICUS_DIR':str(root),'ATTICUS_RESOURCES_DIR':str(ROOT)}
-            build=subprocess.run(['swiftc','-O',str(ROOT/'Atticus.swift'),'-o',str(binary)],env=env,capture_output=True,text=True)
+            root=Path(folder);binary=root/'Aurel'
+            env={**os.environ,'AUREL_DIR':str(root),'AUREL_RESOURCES_DIR':str(ROOT)}
+            build=subprocess.run(app_swiftc(binary,'-O'),env=env,capture_output=True,text=True)
             self.assertEqual(build.returncode,0,build.stderr)
             result=subprocess.run([str(binary),'--selftest'],env=env,capture_output=True,text=True,timeout=20)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             # Export a VM-built, scratch-state preview; never install or launch it on the host.
-            preview=ROOT/'test-artifacts'/'Atticus Agents Preview.app';contents=preview/'Contents'
+            preview=ROOT/'test-artifacts'/'Aurel Agents Preview.app';contents=preview/'Contents'
             (contents/'MacOS').mkdir(parents=True,exist_ok=True);(contents/'Resources').mkdir(exist_ok=True)
-            shutil.copy2(binary,contents/'MacOS'/'Atticus');shutil.copy2(ROOT/'atticus.py',contents/'Resources'/'atticus.py')
+            shutil.copy2(binary,contents/'MacOS'/'Aurel');shutil.copy2(ROOT/'aurel.py',contents/'Resources'/'aurel.py')
             shutil.copytree(ROOT/'ui',contents/'Resources'/'ui',dirs_exist_ok=True)
             launcher=contents/'MacOS'/'launch'
-            launcher.write_text('#!/bin/zsh\nexport ATTICUS_DIR=$(mktemp -d)\nexport ATTICUS_RESOURCES_DIR="$(cd "$(dirname "$0")/../../../.." && pwd)"\nprintf \'%s\\n\' \'{"input":"type","safe":true}\' > "$ATTICUS_DIR/settings.json"\nexec "$(dirname "$0")/Atticus" -onboarded YES\n');launcher.chmod(0o755)
+            launcher.write_text('#!/bin/zsh\nexport AUREL_DIR=$(mktemp -d)\nexport AUREL_RESOURCES_DIR="$(cd "$(dirname "$0")/../../../.." && pwd)"\nprintf \'%s\\n\' \'{"input":"type","safe":true}\' > "$AUREL_DIR/settings.json"\nexec "$(dirname "$0")/Aurel" -onboarded YES\n');launcher.chmod(0o755)
             with (contents/'Info.plist').open('wb') as f:
-                plistlib.dump({'CFBundleIdentifier':'com.atticus.agents-preview','CFBundleName':'Atticus Agents Preview',
+                plistlib.dump({'CFBundleIdentifier':'com.aurel.agents-preview','CFBundleName':'Aurel Agents Preview',
                               'CFBundleExecutable':'launch','CFBundlePackageType':'APPL','CFBundleVersion':'1','LSUIElement':True,
                               'NSMicrophoneUsageDescription':'Listen when you use the microphone.',
                               'NSAppleEventsUsageDescription':'Perform the actions you request.',

@@ -1,19 +1,12 @@
-"""Regressions from the 1.3.2 UI review; source and Node checks only, no windows."""
+"""Regressions from the 1.3.2 UI review, on the native box, Settings and setup: source checks and model runs, no windows."""
 from pathlib import Path
 import re
-import shutil
-import subprocess
 import unittest
+
+from tests import native_ui
 
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def node(test, script):
-    if not shutil.which('node'):
-        test.skipTest('Node runs the overlay checks')
-    result = subprocess.run(['node', '--input-type=module'], input=script, capture_output=True, text=True)
-    test.assertEqual(result.returncode, 0, result.stderr)
 
 
 def contrast(fg, bg):
@@ -29,221 +22,232 @@ def tint(color, alpha, bg='#ffffff'):
     return '#' + ''.join('%02x' % round(alpha * int(color[i:i + 2], 16) + (1 - alpha) * int(bg[i:i + 2], 16)) for i in (1, 3, 5))
 
 
+def token(source, theme, name):
+    """(dark, light) hex of a PrefsTheme/SetupTheme colour: `var fg3: Color { dark ? Color(hex: 0x…) : Color(hex: 0x…) }`."""
+    body = source[source.index('struct ' + theme + ' {'):]
+    m = re.search(r'var ' + name + r': Color \{ dark \? Color\(hex: 0x([0-9a-f]{6})\) : Color\(hex: 0x([0-9a-f]{6})\) \}', body)
+    return '#' + m.group(1), '#' + m.group(2)
+
+
+def part(source, start, end):
+    i = source.index(start)
+    return source[i:source.index(end, i)]
+
+
 class UIReviewFixTests(unittest.TestCase):
     def setUp(self):
-        self.swift = (ROOT / 'Atticus.swift').read_text()
-        self.box = (ROOT / 'ui/ui.html').read_text()
-        self.settings = (ROOT / 'ui/settings.html').read_text()
-        self.onboarding = (ROOT / 'ui/onboarding.html').read_text()
+        self.swift = (ROOT / 'Aurel.swift').read_text()
+        self.box = (ROOT / 'Box.swift').read_text()
+        self.settings = (ROOT / 'Settings.swift').read_text()
+        self.onboarding = (ROOT / 'Onboarding.swift').read_text()
 
     def test_native_clicks_reach_try_again_the_agents_pill_and_pill_buttons(self):
-        tap = self.box[self.box.index('    tap([x, y])'):self.box.index('    size(h)')]
-        node(self, r'''let clicked = '';
-const make = key => { const el = { closest: s => s.split(', ').includes(key) ? el : null, click() { clicked = key; } }; return el; };
-let folded = false, dictating = false;
-const document = { elementFromPoint: () => current, body: { classList: { contains: c => c === 'dictate' && dictating } } }; let current;
-const $ = () => ({ classList: { contains: () => false }, value: '' }), drop = () => { clicked = 'typing'; }, comp = () => { clicked = 'typing box'; }, post = () => {}, status = () => {}, fit = () => {};
-const ui = {''' + tap + r'''};
-for (const key of ['.redo', '#agents-pill', '.dn button']) { current = make(key); clicked = ''; ui.tap([0, 0]); if (clicked !== key) { console.error(key + ' opened the ' + clicked); process.exit(1); } }
-dictating = true; current = make('.dn'); clicked = ''; ui.tap([0, 0]); if (clicked) { console.error('a click on the dictation pill opened the ' + clicked); process.exit(1); }
+        # Try again, the agents pill and the dictation pill's buttons are buttons, so a click on them is not a click on the answer
+        self.assertIn('.boxTarget("redo", kind: .button {', self.box)
+        self.assertIn('.boxTarget("agents", kind: .button {', self.box)
+        self.assertIn('.boxTarget("dn\\(i)", kind: .button(m.dnButtons[i].1))', self.box)
+        native_ui(self, r'''
+let m = BoxModel(); var sent: [[String: Any]] = []; m.post = { sent.append($0) }
+m.receive("listen", NSNull()); m.receive("words", "why"); m.receive("think", NSNull()); m.receive("line", "✓ Because.")
+guard case .answer(let a)? = m.turns.last?.parts.first(where: { if case .answer = $0 { return true }; return false }) else { fatalError() }
+var clicked = ""
+let answer = TargetEntry("a:" + a.uuidString, CGRect(x: 0, y: 0, width: 300, height: 100), false, .answer)
+m.targets = [answer, TargetEntry("redo", CGRect(x: 10, y: 80, width: 60, height: 16), true, .button { clicked = "redo" })]
+m.tap(CGPoint(x: 20, y: 85)); precondition(clicked == "redo" && sent.allSatisfy { $0["copy"] == nil }, "Try again copied the answer")
+m.targets = [answer]; m.tap(CGPoint(x: 20, y: 20)); precondition(sent.contains { $0["copy"] as? String == "Because." }, "a click on the answer copies it")
+m.receive("dictate", true); sent = []
+m.targets = [TargetEntry("pill", CGRect(x: 0, y: 0, width: 200, height: 36), false, .area), TargetEntry("dn0", CGRect(x: 150, y: 4, width: 40, height: 28), true, .button { clicked = "dn" })]
+m.tap(CGPoint(x: 160, y: 10)); precondition(clicked == "dn")
+clicked = ""; m.tap(CGPoint(x: 20, y: 10)); precondition(clicked.isEmpty && sent.isEmpty, "a click on the dictation pill opened the typing box")
 ''')
 
     def test_typing_row_animates_everything_it_changes(self):
-        # Oct 20, 2026: the open row's -4px side margins jumped while its 4px padding animated, so the field and buttons slid
-        closed = re.search(r'  #comp \{([^}]*)\}', self.box).group(1)
-        opened = re.search(r'  #comp\.open \{([^}]*)\}', self.box).group(1)
-        animated = {p.split()[0] for p in re.search(r'transition: ([^;]*);', closed).group(1).split(',')}
-        for prop in re.findall(r'([a-z-]+):', opened):
-            self.assertIn(prop, animated)
+        # Oct 20, 2026: the open row's -4px side margins jumped while its padding animated. Natively the margins never change
+        # and every change to the row comes from compOpen, which only changes inside one animation.
+        composer = part(self.box, 'private struct Composer: View {', '    func bead(')
+        self.assertIn('.padding(.horizontal, -4).padding(.top, m.compOpen ?', composer)
+        self.assertIn('if compOpen != on { withAnimation(BX.ease(0.24)) { compOpen = on } }', self.box)
 
     def test_choice_number_shortcuts_work_from_the_empty_composer(self):
-        handler = self.box[self.box.index("  $('ask').onkeydown = e => {"):self.box.index('  // the model row:')]
-        node(self, r'''let picked = 0, clicked = 0, prevented = false;
-const choices = Array.from({length: 3}, (_, i) => ({choose() { picked = i + 1; }, click() { clicked++; }, focus() {}}));
-const ask = {value: ''}, thread = {querySelector: () => null, querySelectorAll: () => choices};
-const $ = id => id === 'ask' ? ask : thread, part = () => null, status = () => {}, post = () => {};
-const window = {ui: {respond: () => false}}; let listening = false, working = false;
-''' + handler + r'''
-const key = value => ask.onkeydown({key: value, target: ask, isComposing: false, metaKey: false, ctrlKey: false, altKey: false, preventDefault() { prevented = true; }});
-key('2'); if (picked !== 2 || clicked || !prevented) process.exit(1);
-picked = 0; prevented = false; ask.value = 'version '; key('2'); if (picked || prevented) process.exit(2);
+        keys = part(self.box, '    func keys(_ k: KeyPress) -> KeyPress.Result {', '\n    }\n')
+        self.assertIn('guard m.ask.isEmpty, k.modifiers.isEmpty else { return .ignored }', keys)   # "version 2" is typing, not a pick
+        digit = keys[keys.index('if let d = Int(k.characters)'):keys.index('return .handled')]
+        self.assertIn('m.pickDone(c.id, d - 1)', digit)
+        self.assertNotIn('if pics', digit, 'the page picked a choice with pictures too (c.choose = () => done(i))')
+        native_ui(self, r'''
+let m = BoxModel(); var sent: [[String: Any]] = []; m.post = { sent.append($0) }
+m.receive("listen", NSNull()); m.receive("words", "which"); m.receive("think", NSNull())
+m.receive("pick", ["q": "Which?", "options": [["label": "A"], ["label": "B"], ["label": "C"]]])
+guard let c = m.liveCard({ if case .pick = $0 { return true }; return false }) else { fatalError() }
+m.pickDone(c.id, 1)
+precondition(sent.contains { $0["pick"] as? String == "1" } && m.turns.last?.steps.last?.text == "Picked B")
 ''')
-        self.assertIn('c.choose = () => done(i)', self.box)
-        self.assertIn('cs[e.key - 1].choose()', self.box)
 
     def test_full_access_badge_is_a_keyboard_control(self):
-        self.assertIn('id="mode" role="button" tabindex="0"', self.box)
-        self.assertIn('#mode:focus-visible', self.box)
-        self.assertIn("$('mode').onclick = enableSafeMode", self.box)
-        self.assertIn("if (e.key === 'Enter' || e.key === ' ')", self.box)
-        self.assertIn("if (el?.closest('#mode')) return enableSafeMode()", self.box)
+        # The box never takes keyboard focus; a click on the badge turns safe mode back on
+        self.assertIn('.boxTarget("mode", kind: .mode).help("Safe mode is off. Click to turn it on.")', self.box)
+        native_ui(self, r'''
+let m = BoxModel(); var sent: [[String: Any]] = []; m.post = { sent.append($0) }
+m.receive("mode", false); precondition(m.safeOff)
+m.targets = [TargetEntry("mode", CGRect(x: 0, y: 0, width: 80, height: 22), true, .mode)]
+m.tap(CGPoint(x: 10, y: 10))
+precondition(sent.contains { $0["safe"] as? Bool == true } && m.status == "Safe mode on · Settings turns it off")
+''')
 
     def test_failed_dictation_offers_its_words_to_copy(self):
-        dictated = self.box[self.box.index('    dictated({'):self.box.index('    learned(word)')]
-        node(self, r'''let sent, button;
-const fit = () => {}, setState = () => {}, $ = () => ({ style: {} }), post = m => { sent = m; };
-let listening = true, boost = 1;
-const document = { body: { classList: { remove() {} } }, createElement: () => ({}) }, pill = () => ({ append: (...a) => { button = a[1]; } });
-const ui = {''' + dictated + r'''};
-ui.dictated({ text: 'Nothing selected to insert — saved to History.', ok: false }); if (button) process.exit(1);
-ui.dictated({ text: 'Couldn’t insert. Your words are still here.', ok: false, words: 'my words' }); button.onclick();
-if (sent?.copy !== 'my words' || button.textContent !== 'Copied') process.exit(1);
-ui.dictated({ text: 'Couldn’t insert. Press ⌃⌘V to paste it.', ok: false, history: true }); button.onclick();
-if (sent?.dictationHistory !== true || button.textContent !== 'History') process.exit(1);
+        native_ui(self, r'''
+let m = BoxModel(); var sent: [[String: Any]] = []; m.post = { sent.append($0) }
+m.receive("dictate", true)
+m.receive("dictated", ["text": "Nothing selected to insert — saved to History.", "ok": false]); precondition(m.dnButtons.isEmpty)
+m.receive("dictated", ["text": "Couldn’t insert. Your words are still here.", "ok": false, "words": "my words"])
+precondition(m.dnButtons.map { $0.0 } == ["Copy"]); m.dnButtons[0].1()
+precondition(sent.last?["copy"] as? String == "my words")
+precondition(m.dnButtons.first?.0 == "Copied", "the Copy button still says \(m.dnButtons.first?.0 ?? "nothing") after copying")
+m.receive("dictated", ["text": "Couldn’t insert. Press ⌃⌘V to paste it.", "ok": false, "history": true])
+precondition(m.dnButtons.map { $0.0 } == ["History"]); m.dnButtons[0].1()
+precondition(sent.last?["dictationHistory"] as? Bool == true)
 ''')
 
     def test_agent_start_releases_an_empty_typed_composer_for_the_fade(self):
-        started = self.box[self.box.index('    agentStarted(row)'):self.box.index('    agentSteered(row)')]
-        self.assertIn("if(!$('ask').value)comp(false)", started)
+        native_ui(self, r'''
+let m = BoxModel()
+m.comp(true); m.receive("agentStarted", ["title": "Report"]); precondition(!m.compOpen, "an empty typing box held the box open")
+m.comp(true); m.ask = "and also"; m.receive("agentStarted", ["title": "Report"]); precondition(m.compOpen, "the start took typed words away")
+''')
 
     def test_learned_word_shows_in_the_pill_after_it_folded(self):
         self.assertIn('learnedWord = word; pill(true); show(); js("learned", word)', self.swift)
 
     def test_reduce_motion_stops_onboarding_loops(self):
-        rule = re.search(r'@media \(prefers-reduced-motion: reduce\) \{ \*, \*::before, \*::after \{(.*?)\}', self.onboarding).group(1)
-        self.assertIn('animation-iteration-count: 1 !important', rule)
-        self.assertIn("const reduced = matchMedia('(prefers-reduced-motion: reduce)')", self.onboarding)
-        self.assertIn("reduced.addEventListener('change'", self.onboarding)
-        self.assertIn('welcomeGeneration++; previewGeneration++;', self.onboarding)
-        self.assertIn('Object.keys(loops).forEach(id => finals[id]())', self.onboarding)
-        self.assertIn('if (reduced.matches) { finals[id](); await motionChange(); }', self.onboarding)
-        self.assertNotIn("const still = matchMedia('(prefers-reduced-motion: reduce)').matches", self.onboarding)
+        # The page followed Reduce Motion while open: loops snapped to their last frame. Natively every preview takes m.reduce
+        # and shows its last frame, but the model must hear the change.
+        for stage in ('MacStage(run: active, reduce: m.reduce)', 'TextStage(run: active, reduce: m.reduce)', 'PointStage(run: active, reduce: m.reduce)',
+                      'WorkStage(run: on, reduce: m.reduce)', 'DictateStage(run: on, reduce: m.reduce'):
+            self.assertIn(stage, self.onboarding)
+        self.assertIn('if reduce { snapped = true; play = true; box = true; return }', self.onboarding)
+        native_ui(self, r'''
+let m = OnboardingModel()
+m.receive("motion", true); precondition(m.reduce, "setup ignores a Reduce Motion change")
+m.receive("motion", false); precondition(!m.reduce)
+''')
+        self.assertTrue('accessibilityDisplayOptionsDidChangeNotification' in self.swift, 'nothing tells setup when Reduce Motion changes')
 
     def test_onboarding_welcome_orb_keeps_animating(self):
-        start = self.onboarding.index("    const cv = $('orb')")
-        loop = self.onboarding[start:self.onboarding.index('})(prev);', start) + len('})(prev);')]
-        node(self, r'''const run = (isReduced, page) => { let frames = 0, timers = 0, painted = 0;
-const canvas2d = { setTransform() {}, clearRect() {} }, $ = () => ({ getContext: () => canvas2d }), E = { r: () => ({ mode: 'm', speed: 1, opts: {} }), M: { m: () => ({}) }, p: () => painted++ };
-globalThis.requestAnimationFrame = () => frames++; globalThis.setTimeout = () => timers++;
-let reduced = { matches: isReduced }, cur = page, orbWake = null;
-''' + loop + r'''
-return {frames, timers, painted, waiting: typeof orbWake === 'function'}; };
-const active = run(false, 'welcome'), still = run(true, 'welcome'), away = run(false, 'text');
-if (active.painted !== 1 || active.frames !== 1 || active.timers || active.waiting) process.exit(1);
-if (still.painted !== 1 || still.frames || still.timers || !still.waiting) process.exit(2);
-if (away.frames || away.timers || !away.waiting) process.exit(3);
-''')
+        welcome = part(self.onboarding, 'ZStack { Glow(inset: 60); OrbRep(', '\n')
+        self.assertIn('OrbRep(running: on && !m.reduce)', welcome)   # runs on its page; still under Reduce Motion or away
+        orb = (ROOT / 'Orb.swift').read_text()
+        view = part(orb, 'final class OrbView: NSView {', '\n}\n')
+        self.assertIn('prev = CACurrentMediaTime(); paint()', view)   # a still orb is painted once, never blank
+        self.assertIn('guard running else { l.isPaused = true; return }', view)   # no frames while still
+        self.assertIn('if running && !oldValue { prev = CACurrentMediaTime(); link?.isPaused = false }', view)   # and it wakes on its page
 
     def test_settings_and_agents_text_colours_are_readable(self):
-        light = re.search(r':root \{(.*?)\}', self.settings, re.S).group(1)
-        dark = re.search(r'prefers-color-scheme: dark\) \{ :root \{(.*?)\}', self.settings, re.S).group(1)
-        var = lambda block, name: re.search(r'--' + name + r': (#[0-9a-f]{6})', block).group(1)
-        for name in ('fg3', 'warn', 'danger'):
-            self.assertGreaterEqual(contrast(var(light, name), '#f5f5f7' if name == 'fg3' else '#ffffff'), 4.5, name)
+        dark, light = {}, {}
+        for name in ('fg3', 'warn', 'danger', 'okText'):
+            dark[name], light[name] = token(self.settings, 'PrefsTheme', name)
+        bg_dark, bg_light = token(self.settings, 'PrefsTheme', 'bg')
+        card_dark, card_light = token(self.settings, 'PrefsTheme', 'card')
+        self.assertGreaterEqual(contrast(light['fg3'], bg_light), 4.5, 'fg3')
+        for name in ('warn', 'danger'):
+            self.assertGreaterEqual(contrast(light[name], card_light), 4.5, name)
         for name in ('fg3', 'warn'):
-            self.assertGreaterEqual(contrast(var(dark, name), '#2a2a2c'), 4.5, 'dark ' + name)
-        self.assertGreaterEqual(contrast(var(light, 'ok-text'), tint('#34c759', .13)), 4.5)
-        self.assertGreaterEqual(contrast(var(light, 'warn'), tint('#ff9f0a', .14)), 4.5)
-        self.assertNotRegex(self.settings, r'\{[^}]*\bcolor: #ff(9f0a|453a)')   # text uses the tokens; fills may keep the bright colours
-        setup_light = re.search(r':root \{(.*?)\}', self.onboarding, re.S).group(1)
-        setup_dark = re.search(r'prefers-color-scheme: dark\) \{ :root \{(.*?)\}', self.onboarding, re.S).group(1)
-        self.assertGreaterEqual(contrast(var(setup_light, 'fg3'), '#fbfbfd'), 4.5)
-        self.assertGreaterEqual(contrast(var(setup_dark, 'fg3'), '#2a2a2c'), 4.5)
-
-    def test_settings_exposes_the_current_page_and_app_list_choice(self):
-        self.assertIn('class="on" aria-current="page"', self.settings)
-        self.assertIn("b.toggleAttribute('aria-current', b === nav)", self.settings)
-        self.assertIn('id="appview" role="group" aria-label="App list"', self.settings)
-        self.assertIn("b.setAttribute('aria-pressed', on)", self.settings)
+            self.assertGreaterEqual(contrast(dark[name], card_dark), 4.5, 'dark ' + name)
+        self.assertIn('.background(rr(10).fill(kind == "ok" ? Color.rgba(52, 199, 89, 0.13) : kind == "no" ? .rgba(255, 159, 10, 0.14)', self.settings)
+        self.assertGreaterEqual(contrast(light['okText'], tint('#34c759', .13)), 4.5)
+        self.assertGreaterEqual(contrast(light['warn'], tint('#ff9f0a', .14)), 4.5)
+        self.assertNotRegex(self.settings, r'foregroundColor\(Color\(hex: 0xff(9f0a|453a)\)\)')   # text uses the tokens; fills may keep the bright colours
+        setup_dark, setup_light = token(self.onboarding, 'SetupTheme', 'fg3')
+        sheet_dark, sheet_light = token(self.onboarding, 'SetupTheme', 'sheet')
+        self.assertGreaterEqual(contrast(setup_light, sheet_light), 4.5)
+        self.assertGreaterEqual(contrast(setup_dark, sheet_dark), 4.5)
 
     def test_onboarding_recorder_names_a_lone_modifier(self):
         self.assertIn('a modifier on its own', self.onboarding)
         self.assertNotIn('Use modifiers with a key', self.onboarding)
 
     def test_removed_sonnet_offer_leaves_no_card_branch(self):
-        self.assertNotIn('Sonnet', self.box[self.box.index('    respond(text)'):self.box.index('    improve()')])
-        self.assertNotIn('"escalate"', self.swift[self.swift.index('func userContentController'):self.swift.index('    func show()')])
-        self.assertNotIn("j.get('off'", (ROOT / 'atticus.py').read_text())
+        self.assertNotIn('Sonnet', part(self.box, '    func respond(_ text: String) -> Bool {', '    func ask(_ a: [Any]) {'))
+        app = self.swift.index('final class App: NSObject {')
+        self.assertNotIn('"escalate"', self.swift[self.swift.index('    func handle(_ b: [String: Any]) {', app):self.swift.index('    func show()', app)])
+        self.assertNotIn("j.get('off'", (ROOT / 'aurel.py').read_text())
 
     def test_agent_cost_reads_like_usage(self):
-        script = ''
-        for page in (self.box,):   # the Agent view's AgentRow.cost has the same checks in Atticus --selftest
-            line = re.search(r'const apiCost=.*?;', page).group(0)
-            script += '{' + line + r'''
-if (apiCost(.0412) !== '≈4.12¢ at API prices' || apiCost(.1861) !== '≈18.6¢ at API prices' || apiCost(2.5) !== '≈$2.50 at API prices') process.exit(1); }
-'''
-        node(self, script)
+        # The Agent view's AgentRow.cost has the same checks in Aurel --selftest
+        native_ui(self, r'''
+let m = BoxModel()
+for (cost, want) in [(0.0412, "≈4.12¢ at API prices"), (0.1861, "≈18.6¢ at API prices"), (2.5, "≈$2.50 at API prices")] {
+    m.receive("agentDone", ["id": "a", "title": "Report", "result": "Done.", "cost": cost])
+    guard case .agent(_, _, _, _, _, _, let got, _)? = m.liveCard({ if case .agent = $0 { return true }; return false })?.kind else { fatalError() }
+    precondition(got == want, "\(got ?? "nil") != \(want)")
+}
+''')
         self.assertNotIn('Plan usage', self.box + self.swift)
 
     def test_box_card_screenshots_define_the_agents_panel(self):
         self.assertTrue((ROOT / 'tests/shoot_agents_design.py').read_text().split("CARDS = r'''", 1)[1].startswith('let agentsUI=AgentPanels()\n'))
 
     def test_a_new_ask_drops_a_paused_card_left_by_resuming_elsewhere(self):
-        listen = self.box[self.box.index('    listen(mode)'):self.box.index('    level(v)')]
-        self.assertIn("querySelectorAll('.rewrite, .paused, .worker').forEach(e => e.remove())", listen)
-
-    def test_rewrite_buttons_answer_hover_and_press_like_card_buttons(self):
-        self.assertIn('.rewrite button:not(:disabled):is(:hover,.hot) { transform: scale(1.03); }', self.box)
-        self.assertIn('.rewrite button:not(:disabled):active { transform: scale(.96); }', self.box)
-
-    def test_box_status_markers_share_compact_centered_rows(self):
-        self.assertRegex(self.box, r'\.a\.stopped \{[^}]*align-items: center;[^}]*line-height: 16px;')
-        self.assertRegex(self.box, r'\.a\.stopped i \{ flex: none; width: 7px; height: 7px;')
-        self.assertRegex(self.box, r'\.step \{[^}]*line-height: 16px;[^}]*align-items: center;')
-        self.assertIn('#agents-pill i { flex:none;', self.box)
-        self.assertRegex(self.box, r'\.agent-card \.eyebrow \{[^}]*align-items:center;[^}]*line-height:14px;')
-        self.assertIn('.agent-card .eyebrow i { flex:none;', self.box)
-
-    def test_agent_start_line_sits_beside_its_orb(self):
-        self.assertIn('.a:is(.stopped, .agent-ack) > :not(.w) + :not(.w) { margin-top: 0; }', self.box)
-
-    def test_agent_card_can_fold_away(self):
-        self.assertIn('.agent-card { max-height:900px; }', self.box)
-        self.assertNotIn('.agent-card { max-height:none; }', self.box)
-
-    def test_agent_card_fits_a_short_box(self):
-        card = self.box[self.box.index('  const agentCard=row=>'):self.box.index("  $('agents-pill').onclick")]
-        fit = card[card.index('    const over='):card.index('    answer.onscroll();')]
-        self.assertIn('answer.tabIndex=0', card)
-        node(self, r'''const getComputedStyle = () => ({maxHeight: '420px'}), $ = () => ({});
-for (const [cardH, want] of [[540, '126px'], [300, undefined], [900, '60px']]) {
-  const d = {offsetHeight: cardH}, answer = {clientHeight: 260, style: {}};
-''' + fit + r'''
-  if (answer.style.maxHeight !== want) { console.error(cardH, answer.style.maxHeight); process.exit(1); }
-}
+        native_ui(self, r'''
+let m = BoxModel()
+m.receive("paused", true); precondition(m.liveCard { if case .paused = $0 { return true }; return false } != nil)
+m.receive("listen", NSNull())
+precondition(m.liveCard { if case .paused = $0 { return true }; return false } == nil, "a new ask kept the paused card")
 ''')
 
+    def test_rewrite_buttons_answer_hover_and_press_like_card_buttons(self):
+        bar = part(self.box, 'private struct RewriteBar: View {', '\n}\n')
+        self.assertIn('OkButton(id: "rw\\(i)"', bar)   # the same button as the cards'
+        ok = part(self.box, 'private struct OkButton: View {', '\n}\n')
+        self.assertIn('let hot = m.hot.contains(id) && !disabled', ok)
+        self.assertIn('.scaleEffect(hot ? 1.03 : 1)', ok)
+
+    def test_agent_card_fits_a_short_box(self):
+        # The page shrank the answer (to 60 px at least) by however much the card overflowed the thread's height,
+        # so the title and actions stay in view in a short box
+        card = part(self.box, 'private struct AgentCardView: View {', '\n}\n')
+        self.assertIn('m.threadMax - (cardH - shownH)', card, 'the answer cap ignores the box height the user set')
+        self.assertIn('max(60, min(260,', card)
+        self.assertIn('.frame(maxHeight: cap)', card[card.index('ScrollView(.vertical'):card.index('.mask(')])
+
     def test_rewrite_actions_sit_above_the_timer_with_one_try_again(self):
-        self.assertIn('.turn:has(.rewrite) .redo { display: none; }', self.box)
-        rewrite = self.box[self.box.index('    rewrite([draft, mode, editable])'):self.box.index('    mini(m)')]
-        node(self, r'''let placed = '';
-const clockRow = { before: () => { placed = 'above the timer'; } }, d = { querySelector: s => s === '.elapsed' ? clockRow : null, append: () => { placed = 'last'; } };
-const turn = () => d, part = () => null, post = () => {}, fit = () => {}, $ = () => ({ querySelectorAll: () => [] });
-const document = { createElement: () => ({ dataset: {}, append() {}, setAttribute() {} }) };
-const ui = {''' + rewrite + r'''};
-ui.rewrite(['Hi Dana,', 'draft', true]); if (placed !== 'above the timer') { console.error(placed); process.exit(1); }
+        native_ui(self, r'''
+let m = BoxModel()
+m.receive("listen", NSNull()); m.receive("words", "reply to Dana"); m.receive("think", NSNull())
+m.receive("rewrite", ["Hi Dana,", "draft", true])
+let kinds = m.turns.last!.parts.map { p -> String in switch p { case .rewrite: return "rewrite"; case .clock: return "clock"; default: return "" } }.filter { !$0.isEmpty }
+precondition(kinds == ["rewrite", "clock"], "\(kinds)")
+m.receive("line", "✓ Hi Dana,")
+precondition(!m.turns.last!.redo, "the timer row's Try again shows beside the bar's own")
 ''')
 
     def test_resize_releases_fixed_height_and_uses_live_box_spacing(self):
-        methods = self.box[self.box.index('    hold(h)'):self.box.index('    respond(text)')]
-        self.assertIn('const chrome = c.offsetHeight - t.offsetHeight', methods)
-        self.assertNotIn('h - 26', methods)
-        node(self, r'''const classes = new Set(), card = {offsetHeight: 246, style: {minHeight: '', getPropertyValue: () => '700'}, classList: {add: x => classes.add(x), remove: x => classes.delete(x)}};
-const thread = {offsetHeight: 120, style: {}}, nodes = {card, thread}, $ = id => nodes[id], sent = [], post = x => sent.push(x);
-let fitted = 0; const fit = () => fitted++;
-const ui = {''' + methods + r'''};
-ui.hold(500);
-if (!classes.has('held') || card.style.minHeight !== '500px' || thread.style.maxHeight !== '374px' || sent[0].boxH !== 374) process.exit(1);
-ui.resizeDone();
-if (classes.has('held') || card.style.minHeight || fitted !== 2) process.exit(2);
+        native_ui(self, r'''
+let m = BoxModel(); var sent: [[String: Any]] = []; m.post = { sent.append($0) }
+m.rects = ["card": CGRect(x: 0, y: 0, width: 400, height: 246), "thread": CGRect(x: 0, y: 60, width: 360, height: 120)]
+m.receive("hold", 500)
+precondition(m.held == 500 && m.threadMax == 374 && sent.first?["boxH"] as? CGFloat == 374, "\(m.threadMax)")
+m.receive("resizeDone", NSNull()); precondition(m.held == nil)
 ''')
-        mouse_up = self.swift[self.swift.index('            default:', self.swift.index('var sizing:')):self.swift.index('            return nil', self.swift.index('            default:', self.swift.index('var sizing:')))]
-        self.assertIn('js("resizeDone")', mouse_up)
+        self.assertIn('let chrome = card - thread', self.box)   # header, composer and spacing as they are now, not a constant
+        start = self.swift.index('            default:', self.swift.index('var sizing:'))
+        self.assertIn('js("resizeDone")', self.swift[start:self.swift.index('            return nil', start)])
 
     def test_settings_disabled_segment_looks_off(self):
-        self.assertIn('.seg button:disabled { opacity: .4; pointer-events: none; }', self.settings)
-        self.assertIn('.seg button:disabled { opacity: .4; pointer-events: none; }', self.onboarding)
+        seg = part(self.settings, 'struct Seg: View {', '\n}\n')
+        self.assertIn('.opacity(disabled ? 0.4 : 1).allowsHitTesting(!disabled)', seg)
+        setup = part(self.onboarding, 'private struct SetupSeg: View {', '\n}\n')
+        self.assertIn('.allowsHitTesting(!disabled)', setup, 'a disabled setup segment still takes clicks')
 
     def test_small_leftovers(self):
-        self.assertIn("moveFailed(){status('Could not move');", self.box)   # a failure, not live work
+        native_ui(self, r'''
+let m = BoxModel(); m.receive("moveFailed", NSNull()); precondition(m.status == "Could not move" && !m.statusLive)   // a failure, not live work
+''')
         self.assertNotIn('js("shortcut"', self.swift)
-        self.assertNotIn('shortcut() {}', self.box)
-        self.assertIn('d.hidden = skip(pages[i])', self.onboarding)   # Devin/Pi: no dots for skipped pages
+        self.assertNotIn('case "shortcut"', self.box)
+        self.assertIn('ForEach(setupPages.filter { !m.skip($0) }', self.onboarding)   # Devin/Pi: no dots for skipped pages
         self.assertNotIn('These need your click', self.onboarding)
         self.assertNotIn('Use Verbatim instead', self.onboarding)
-        self.assertIn('id="appsback" onclick="st.tab(\'account\')"', self.settings)
-        self.assertEqual(self.settings.count('[hidden] {'), 1)
-        self.assertNotIn('.ok:hover code', self.box)
+        self.assertIn('Btn(label: "← Privacy & Safety") { m.openSection("account") }', self.settings)   # Apps has its way back
 
 
 if __name__ == '__main__':

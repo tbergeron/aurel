@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import unittest
 
-from tests import run_swift
+from tests import native_ui, run_swift
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,13 +12,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class SwiftReviewFixTests(unittest.TestCase):
     def setUp(self):
-        self.swift = (ROOT / "Atticus.swift").read_text()
-        self.overlay = (ROOT / "ui/ui.html").read_text()
-        self.settings = (ROOT / "ui/settings.html").read_text()
+        self.swift = (ROOT / "Aurel.swift").read_text()
+        self.box = (ROOT / "Box.swift").read_text()
+        self.settings = (ROOT / "Settings.swift").read_text()
+        app = self.swift.index("final class App: NSObject {")
+        self.app_init = self.swift[self.swift.index("    override init() {", app):self.swift.index("    func handle(_ b: [String: Any]) {", app)]
 
     def test_hands_free_follow_up_keeps_answer_until_words(self):
         wake = self.swift.split('    func wakeTick()', 1)[1].split('    func enableWakeWord()', 1)[0]
         self.assertIn('clickMicrophone(quiet: true)', wake)
+        # a focused, empty Ask field once showed "Listening…" while the follow-up waited on "typing" forever
+        self.assertIn('!(handsFree && followUp && ["off", "box", "typing", "speech permission"].contains($0.0))', wake)
+        self.assertLess(wake.index('guard why.isEmpty'), wake.index('clickMicrophone(quiet: true)'))
         self.assertIn('guard Date() >= wakeRetry else { return }', wake)   # a backoff once pushed the retry back every tick, forever
         self.assertIn('("sound", cueSound?.isPlaying == true || Date() < cueEnds)', wake)
         self.assertIn('("speaking", voice?.isRunning == true || drawing.voice?.isRunning == true)', wake)
@@ -26,7 +31,9 @@ class SwiftReviewFixTests(unittest.TestCase):
         self.assertIn('if !self.quietFollowUp, let selection = self.selection', self.swift)
         start = self.swift.split('    func start(dictate: Bool, quiet: Bool = false)', 1)[1].split('    func heard(', 1)[0]
         self.assertIn('if !quiet { cue("soundStart") }', start)
-        self.assertIn('if quiet { js("quietListen", true) }\n        else {', start)
+        # "Listening…" shows once the mic is open, never before: words said in that gap were lost
+        self.assertNotIn('if quiet { js("quietListen", true) }', start)
+        self.assertLess(start.index('began = Date()   // measure the limit from when the mic is ready'), start.index('if quietFollowUp { js("quietListen", true) }'))
         self.assertIn('self?.quietFollowUp == false', start)
         self.assertIn('if quietFollowUp { hush(); fadeIdleHandsFree(); return }', start)
         heard = self.swift.split('    func heard(_ now: String)', 1)[1].split('    func scheduleDictateAhead()', 1)[0]
@@ -39,15 +46,15 @@ class SwiftReviewFixTests(unittest.TestCase):
             self.assertLess(body.index('if quietFollowUp { hush() }'), body.index('if engine.isRunning') if name != 'typed' else body.index('guard !busy, !engine.isRunning'))
 
     def test_fn_key_match_is_exact_and_modifier_prefixes_conflict(self):
-        helpers = self.swift[self.swift.index("let atticusFnKey"):self.swift.index("func configuredHotkey")]
+        helpers = self.swift[self.swift.index("let aurelFnKey"):self.swift.index("func configuredHotkey")]
         matcher = self.swift[self.swift.index("func specialHotkey"):self.swift.index("func handleSpecialHotkeys")]
         self.assertIn("func hotkeysConflict", matcher)
         recorder = self.swift[self.swift.index("    func done("):self.swift.index("    func say(", self.swift.index("    func done("))]
         self.assertIn("hotkeysConflict(hotkey(),dictateHotkey())", recorder)
         harness = "import Cocoa\nimport Carbon\n" + helpers + "\nvar specialGlobalHotkeys: Any?, specialLocalHotkeys: Any?, specialMainDown = false, specialDictateDown = false\n" + matcher + r'''
-let fnD = (code: 2, mods: atticusFnKey, flags: NSEvent.ModifierFlags.function)
-let fnShiftD = (code: 2, mods: atticusFnKey | shiftKey, flags: NSEvent.ModifierFlags([.function, .shift]))
-let fnOnly = (code: -2, mods: atticusFnKey, flags: NSEvent.ModifierFlags.function)
+let fnD = (code: 2, mods: aurelFnKey, flags: NSEvent.ModifierFlags.function)
+let fnShiftD = (code: 2, mods: aurelFnKey | shiftKey, flags: NSEvent.ModifierFlags([.function, .shift]))
+let fnOnly = (code: -2, mods: aurelFnKey, flags: NSEvent.ModifierFlags.function)
 precondition(!hotkeysConflict(fnD, fnShiftD))
 precondition(hotkeysConflict(fnOnly, fnD))
 var down = false, fired: [Bool] = []
@@ -67,7 +74,8 @@ print("special shortcuts stay distinct")
 
     def test_special_shortcut_registration_is_reported_as_available(self):
         registration = self.swift[self.swift.index("var ref: EventHotKeyRef?"):self.swift.index("let settings = SettingsWindow()")]
-        push = self.swift[self.swift.index("    func push()"):self.swift.index("    func refresh()")]
+        window = self.swift.index("final class SettingsWindow")
+        push = self.swift[self.swift.index("    func push()", window):self.swift.index("    func refresh()", window)]
         self.assertIn("var hotkeyRegistered = false", registration)
         self.assertIn("var dictateHotkeyRegistered = false", registration)
         self.assertIn('"hotkeyTaken": !hotkeyRegistered', push)
@@ -101,24 +109,15 @@ print("long step stays reachable")
         self.assertIn('js("view","namedReply"', named)
 
     def test_retry_voice_hint_only_names_visible_answers(self):
-        respond = self.overlay[self.overlay.index("    respond(text)"):self.overlay.index("    ask([")]
+        respond = self.box[self.box.index("    func respond(_ text: String) -> Bool {"):self.box.index("    func ask(_ a: [Any]) {")]
         self.assertNotIn("Sonnet", respond)
-        if not shutil.which("node"):
-            self.skipTest("Node runs the retry-card behavior check")
-        script = r'''
-let heard = '', clicked = '';
-const buttons = {n:{click(){clicked='n'}}, r:{click(){clicked='r'}}};
-const d = {querySelector(s){const m=s.match(/data-answer="(.)"/);return m ? buttons[m[1]] || null : null;}};
-const thread = {querySelector(s){return s.startsWith('.pk') ? null : d;}};
-const ask = {value:''}, $ = id => id === 'thread' ? thread : ask, status = s => {heard=s};
-const ui = {
-''' + respond + r'''
-};
-if (!ui.respond('try sonnet') || clicked || heard !== 'Say “Retry” or “Not now”') process.exit(1);
-console.log(heard);
-'''
-        result = subprocess.run(["node", "--input-type=module"], input=script, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        native_ui(self, r"""
+let m = BoxModel(); var sent: [[String: Any]] = []; m.post = { sent.append($0) }
+m.receive("listen", NSNull()); m.receive("words", "why"); m.receive("think", NSNull()); m.receive("ask", ["Try again?", "", "r"])
+precondition(m.respond("try sonnet") && sent.allSatisfy { $0["pick"] == nil }, "an unknown reply answered the card")
+precondition(m.status == "Say “Retry” or “Not now”", m.status)
+precondition(m.respond("try again please") && sent.contains { $0["pick"] as? String == "r" })
+""")
 
     def test_point_capture_failure_preserves_answer_and_guides_can_be_replaced(self):
         finish = self.swift[self.swift.index("    func finishPoint("):self.swift.index("    func pointThumb")]
@@ -126,7 +125,7 @@ console.log(heard);
         self.assertIn('js("notice","Couldn’t capture that mark.")', finish)
         self.assertNotIn('js("msg","Couldn’t capture that mark.")', finish)
         self.assertNotIn("drawing.clear()", start)   # pointing keeps a guide up: its marks can be clicked and asked about
-        self.assertIn("notice(s)", self.overlay)
+        self.assertIn('case "notice": setStatus(', self.box)   # a status line: the answer stays
 
     def test_hidden_rewrite_keeps_its_target(self):
         close = self.swift[self.swift.index("    func close(clear: Bool)"):self.swift.index("    func shortcut(", self.swift.index("    func close(clear: Bool)"))]
@@ -159,7 +158,7 @@ print("hidden rewrite target kept")
         self.assertIn("hidden rewrite target kept", run_swift(self, harness))
 
     def test_pointer_respects_reduce_motion(self):
-        pointer = self.swift[self.swift.index("func pointAt("):self.swift.index("// Restart Atticus", self.swift.index("func pointAt("))]
+        pointer = self.swift[self.swift.index("func pointAt("):self.swift.index("// Restart Aurel", self.swift.index("func pointAt("))]
         self.assertIn("let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion\n    if !still {", pointer)
         self.assertLess(pointer.index("accessibilityDisplayShouldReduceMotion"), pointer.index("l.add(pulse"))
         self.assertIn("if let box, lead(from: box, to: w.frame.insetBy(dx: 8, dy: 8)) {", pointer)
@@ -193,7 +192,7 @@ print("hidden rewrite target kept")
 
     def test_voice_ask_that_heard_nothing_ends_quietly(self):
         # Oct 20, 2026: a tap, or clicking in to type after letting go, ended in "Didn't catch that." / an empty review.
-        finish = self.swift[self.swift.index("    func finish() {"):self.swift.index("    // atticus.py --wait, started")]
+        finish = self.swift[self.swift.index("    func finish() {"):self.swift.index("    // aurel.py --wait, started")]
         self.assertNotIn("Didn't catch that", finish)
         self.assertIn('if did.isEmpty { js("msg", ""); return hide(after: 0.2) }', finish)
         stop = self.swift[self.swift.index("    func stop() {", self.swift.index("final class App")):self.swift.index("    func applyReplacement()")]
@@ -203,9 +202,14 @@ print("hidden rewrite target kept")
         self.assertIn('else if busy && proc == nil && offerText == nil && !dictating && text.isEmpty { hush(); js("msg", "") }', typing)
         start = self.swift[self.swift.index("    func start(dictate: Bool, quiet: Bool = false)"):self.swift.index("    func heard(")]
         self.assertLess(start.index("began = Date()   // key-down"), start.index("engine.start(device"))
-        msg = self.overlay[self.overlay.index("    msg(s) {"):self.overlay.index("    stopped(s) {")]
-        self.assertIn("document.body.classList.remove('hearing')", msg)   # a tap's quiet end comes straight from listening
-        self.assertIn('if (part(\'q\')?.classList.contains(\'empty\')) { turn().remove(); status(s); }', msg)   # "" leaves no line
+        native_ui(self, r"""
+let m = BoxModel()
+m.receive("listen", NSNull()); precondition(m.hearing)
+m.receive("msg", "")   // a tap's quiet end comes straight from listening
+precondition(!m.hearing && m.turns.isEmpty && m.status == "", "an empty ask left a line")
+m.receive("listen", NSNull()); m.receive("words", "hi"); m.receive("msg", "No answer")
+precondition(m.turns.last?.aKind == "cancel" && m.turns.last?.aText == "No answer")
+""")
 
     def test_hidden_box_forgets_hover(self):
         gone = self.swift[self.swift.index("    func gone()"):self.swift.index("    func pill(")]
@@ -219,12 +223,12 @@ print("hidden rewrite target kept")
 
     def test_agent_card_never_takes_return_from_typing_in_another_app(self):
         panels = self.swift[self.swift.index("final class AgentPanels"):self.swift.index("final class RoutineWake")]
-        monitor = panels[panels.index("keyMonitor ="):panels.index("timer =")]
+        start = panels.index("keyMonitor ="); monitor = panels[start:panels.index("timer =", start)]
         self.assertIn("app.defaultKey(false)", monitor)
         self.assertIn("kVK_Return", monitor)   # Return itself must still reach the card
 
     def test_a_finish_opens_its_own_chip_and_never_the_box(self):
-        # Oct 21: "when the agents finish, the original Atticus box pops up ... just have the regular agent box pop up"
+        # Oct 21: "when the agents finish, the original Aurel box pops up ... just have the regular agent box pop up"
         panels = self.swift[self.swift.index("final class AgentPanels"):self.swift.index("final class RoutineWake")]
         ping = panels[panels.index('} else if kind == "ping"'):panels.index('} else if kind == "steered"')]
         self.assertIn('row["status"] as? String == "done"', ping)
@@ -269,7 +273,7 @@ print("hidden rewrite target kept")
         cancel = tick[tick.index("if let id = ping"):tick.index('app.js("agentCancelled")')]
         self.assertIn("!app.panel.isVisible || app.busy || app.engine.isRunning", cancel)   # only the user's close or ask ends it
         self.assertIn('send(["action":"seen","id":id])', cancel)
-        self.assertIn("body.dictate :is(#thread,", self.overlay)
+        self.assertIn("if m.dictate { Pill(m: m) }\n            else {", self.box)   # dictation shows the pill alone, never the thread and its card
 
     def test_agent_show_brings_the_done_card_after_the_ask_ends(self):
         spawn = self.swift[self.swift.index("    func spawn()"):self.swift.index("    func unwarm()")]
@@ -290,8 +294,7 @@ print("hidden rewrite target kept")
         self.assertLess(stale.index('status?("The screen changed. Ask again to continue.")'), stale.index("clear()"))
 
     def test_in_app_accessibility_calls_are_bounded(self):
-        init = self.swift[self.swift.index("    override init() {\n        let cfg = WKWebViewConfiguration()"):self.swift.index("    func userContentController(_ c: WKUserContentController")]
-        self.assertIn("AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)", init)
+        self.assertIn("AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)", self.app_init)
         menu = self.swift[self.swift.index("    static func menuShortcut("):self.swift.index("    static func sendKeys(")]
         self.assertIn("AXUIElementSetMessagingTimeout(application, 0.15)", menu)
         web = self.swift[self.swift.index("    static func webFocused("):self.swift.index("    // An app sends keys")]
@@ -330,8 +333,7 @@ print("wake waits for active session")
         self.assertIn("wake waits for active session", run_swift(self, swift))
 
     def test_display_changes_clear_stale_drawings_and_keep_agent_windows_reachable(self):
-        app_init = self.swift[self.swift.index("    override init() {\n        let cfg = WKWebViewConfiguration()"):self.swift.index("    func userContentController(_ c: WKUserContentController")]
-        screen = app_init[app_init.index("NSApplication.didChangeScreenParametersNotification"):]
+        screen = self.app_init[self.app_init.index("NSApplication.didChangeScreenParametersNotification"):]
         self.assertIn("drawing.clear()", screen)
         self.assertIn("The screen changed. Ask again to continue.", screen)
         self.assertIn("interrupted = hadDrawing && (engine.isRunning || dictating || busy)", screen)
@@ -353,7 +355,7 @@ print("wake waits for active session")
         self.assertIn("followTimer?.invalidate()", gone)
         self.assertIn("if !dictate && !drawingReply { targetScreen = currentRequestScreen(panel) }", self.swift)
         self.assertIn("if !drawing.active { targetScreen = currentRequestScreen(panel) }", self.swift)
-        self.assertIn("input,textarea,[contenteditable=true]", self.overlay)
+        self.assertIn('m.post(["focus": f])', self.box)   # typing in the box holds it still
 
     def test_speculative_voice_start_keeps_the_key_down_focus_snapshot(self):
         run = self.swift[self.swift.index("    func run(_ t: String"):self.swift.index("\n    }\n}", self.swift.index("    func run(_ t: String"))]
@@ -408,7 +410,7 @@ print("shelf follows")
         # every change is saved, only for agents that could still show: working, or finished/seen in the last 10 minutes
         self.assertIn('didSet { if dismissed != oldValue { Prefs.set("agentDismissed", dismissed.filter { rows[$0].map { Self.live.contains($0["status"] as? String ?? "") || Self.lingers($0) } ?? false }', panels)
         dismiss = panels[panels.index('        case "dismiss":'):panels.index('        case "stack":')]
-        self.assertLess(dismiss.index('rows[id]?["seenAt"] = Date().timeIntervalSince1970'), dismiss.index("dismissed.insert(id)"))   # × restarts its 10 minutes, as atticus.py saves it
+        self.assertLess(dismiss.index('rows[id]?["seenAt"] = Date().timeIntervalSince1970'), dismiss.index("dismissed.insert(id)"))   # × restarts its 10 minutes, as aurel.py saves it
         self.assertIn('if row["status"] as? String == "needs-you" || finished { dismissed.remove(id) }', panels)   # a finish shows again, as on the page
         self.assertIn('let finished = Self.live.contains(rows[id]?["status"] as? String ?? "") && Self.lingers(row)', panels)
         self.assertIn('shelfModel.receive("prefs", ["dismissed":Array(dismissed)', panels)
@@ -497,7 +499,7 @@ print("shelf follows")
         visible = self.swift[start:self.swift.index("\n    }\n", self.swift.index("    static func paintRect(", start)) + 6]
         lookup = self.swift[self.swift.index('["--window-target","--target-app"].contains'):]
         self.assertIn('target["visible"] = onScreen && target["minimized"] as? Bool != true &&', lookup[:lookup.index("\n    exit(0)\n}")])
-        look = self.swift[self.swift.index('CommandLine.arguments[1] == "--look"'):self.swift.index('// `Atticus --text <app>')]
+        look = self.swift[self.swift.index('CommandLine.arguments[1] == "--look"'):self.swift.index('// `Aurel --text <app>')]
         self.assertIn("SCContentFilter(desktopIndependentWindow: w)", look)   # the window's own pixels: right even when covered
         self.assertIn("MiniScreen.paintRect(w.frame, display: d.frame, pictureHeight: img.height)", look)
         self.assertLess(look.index("c.draw(shot, in: spot)"), look.index('print("window")'))   # it says painted only after painting
@@ -517,8 +519,8 @@ print("visible ok")
 
     def test_settings_describe_all_shortcuts_and_remove_dead_pointer_toggle(self):
         self.assertGreaterEqual(self.settings.count("a modifier on its own"), 2)
-        self.assertNotIn('data-k="pointer"', self.settings)
-        self.assertNotIn(">Show me where<", self.settings)
+        self.assertNotIn('"pointer"', self.settings)
+        self.assertNotIn("Show me where", self.settings)
 
 
 if __name__ == "__main__":

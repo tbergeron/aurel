@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark a local model as Atticus's one-step voice command router.
+"""Benchmark a local model as Aurel's one-step voice command router.
 Run against a llama.cpp server: python3 tests/evals/local_router_bench.py http://127.0.0.1:8080 [label]
 Each case gives the screen context the router sees and the one command line it should write; prints accuracy and latency."""
 import json
@@ -11,15 +11,15 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from atticus import ROUTER as SYSTEM, ROUTER_GRAMMAR as GRAMMAR   # the app's own prompt, so the scores are the app's
+from aurel import ROUTER as SYSTEM, ROUTER_GRAMMAR as GRAMMAR   # the app's own prompt, so the scores are the app's
 
 SAFARI = ("Front app: Safari, window \"Amazon.com: usb c hub\"\nOpen apps: Safari, Messages, Slack, Terminal, Spotify, Notes\n"
           "Controls:\n1 button: Back\n2 button: Forward\n3 box: Search Amazon\n4 button: Go\n5 link: Anker USB C Hub, 7-in-1\n"
           "6 link: UGREEN USB C Hub 5 in 1\n7 link: Next page\n8 button: Add to Cart\n9 button: Sign in")
 MESSAGES = ("Front app: Messages, window \"Sam Rivera\"\nOpen apps: Messages, Safari, Slack, Notes\n"
             "Controls:\n1 button: Compose\n2 box: Search\n3 row: Sam Rivera\n4 row: Mom\n5 box: iMessage\n6 button: Send\n7 button: Emoji")
-CODE = ("Front app: Visual Studio Code, window \"atticus.py — atticus-mac\"\nOpen apps: Visual Studio Code, Terminal, Safari, Slack\n"
-        "Controls:\n1 tab: atticus.py\n2 tab: README.md\n3 button: Run\n4 box: Search")
+CODE = ("Front app: Visual Studio Code, window \"aurel.py — aurel-mac\"\nOpen apps: Visual Studio Code, Terminal, Safari, Slack\n"
+        "Controls:\n1 tab: aurel.py\n2 tab: README.md\n3 button: Run\n4 box: Search")
 
 # (context, request, expected command line); a regex where several are right
 CASES = [

@@ -1,12 +1,11 @@
-// Atticus overlay: hold to talk and release to send, or press to start and press again to send.
-// A box in the top left (ui/ui.html, with the thinking-orbs orb) shows your words live (Apple on-device speech),
-// then Atticus's notes and steps while `atticus.py` works, then the answer. It never takes focus.
-// Build: ./build.sh. Kept running by ~/Library/LaunchAgents/com.atticus.app.plist
+// Aurel overlay: hold to talk and release to send, or press to start and press again to send.
+// A box in the top left (Box.swift, with the thinking-orbs orb) shows your words live (Apple on-device speech),
+// then Aurel's notes and steps while `aurel.py` works, then the answer. It never takes focus.
+// Build: ./build.sh. Kept running by ~/Library/LaunchAgents/com.aurel.app.plist
 import Cocoa
 import Carbon
 import AVFoundation
 import Speech
-import WebKit
 import ScreenCaptureKit
 import Vision
 import PDFKit
@@ -18,10 +17,10 @@ import AudioToolbox
 import NaturalLanguage
 import SwiftUI
 #if canImport(Textual)
-import Textual   // build.sh builds through Package.swift, which adds it; a plain `swiftc Atticus.swift` (the tests) goes without
+import Textual   // build.sh builds through Package.swift, which adds it; a plain `swiftc Aurel.swift` (the tests) goes without
 #endif
 
-let dir = ProcessInfo.processInfo.environment["ATTICUS_RESOURCES_DIR"] ?? Bundle.main.resourcePath!   // build.sh copies atticus.py and ui/ in here
+let dir = ProcessInfo.processInfo.environment["AUREL_RESOURCES_DIR"] ?? Bundle.main.resourcePath!   // build.sh copies aurel.py and ui/ in here
 
 // Text stays local; totals survive history deletion and never contain dictated words.
 enum DictationData {
@@ -150,7 +149,7 @@ enum DictationData {
     }
     // How a word sounds, roughly: vowels drop and Soundex-like classes merge (t/d, lips b/p/f/v, nasals m/n),
     // so "Saarth", "Sarda" and "sort" become "srt", and "somebody" sits one sound from "some of you".
-    // Same rule as dictate_sound in atticus.py.
+    // Same rule as dictate_sound in aurel.py.
     static func sound(_ text: String) -> String {
         var s = String(text.lowercased().folding(options: .diacriticInsensitive, locale: nil).filter { $0.isLetter })
         for (a, b) in [("ph", "f"), ("th", "t"), ("ck", "k"), ("sh", "s"), ("qu", "k")] { s = s.replacingOccurrences(of: a, with: b) }
@@ -210,9 +209,9 @@ enum DictationData {
     }
 }
 
-// Settings, shared with atticus.py (model, screen, openOn, instant): ~/.config/atticus/settings.json
+// Settings, shared with aurel.py (model, screen, openOn, instant): ~/.config/aurel/settings.json
 enum Prefs {
-    static let path = (ProcessInfo.processInfo.environment["ATTICUS_DIR"] ?? NSString(string: "~/.config/atticus").expandingTildeInPath) + "/settings.json"
+    static let path = (ProcessInfo.processInfo.environment["AUREL_DIR"] ?? NSString(string: "~/.config/aurel").expandingTildeInPath) + "/settings.json"
     static let defaults: [String: Any] = ["hotkeyCode": 49, "hotkeyMods": controlKey | optionKey, "hotkeyLabel": "⌃⌥Space", "login": true, "paused": false, "corner": "top-left", "linger": "normal",
         "soundStart": "Pop", "soundRelease": "Bottle", "soundDone": "Glass", "soundStop": "Tink", "volume": 0.16, "client": "local", "model": "haiku", "instant": true,
         "wakeWord": false, "microphone": "automatic", "quietAudio": false, "quietLevel": 0.18, "agentModel": "sonnet", "localModel": "gemma4", "agentUserTools": true, "fixSetup": false,
@@ -236,7 +235,7 @@ enum Prefs {
         if ["devin", "pi"].contains(values["client"] as? String ?? "") { values["client"] = "local" }   // Devin and Pi were removed (Oct 29, 2026)
         for k in ["apiBase", "apiKey", "apiModel", "agentApiModel"] { values[k] = nil }   // custom servers were removed (Oct 29, 2026); Local replaces them
         for (k, old) in [("boxW", 460.0), ("boxH", 360.0)] where (values[k] as? NSNumber)?.doubleValue == old { values[k] = defaults[k] }   // every write saves the defaults too: the old size untouched is no choice
-        // No dictation shortcut, never cleared on purpose: fn alone (code -2, atticusFnKey), unless the talk shortcut already holds fn.
+        // No dictation shortcut, never cleared on purpose: fn alone (code -2, aurelFnKey), unless the talk shortcut already holds fn.
         if values["dictateHotkeyLabel"] as? String == "", values["dictateHotkeyOff"] as? Bool != true, (values["hotkeyMods"] as? Int ?? 0) & (1 << 20) == 0 {
             values["dictateHotkeyCode"] = -2; values["dictateHotkeyMods"] = 1 << 20; values["dictateHotkeyLabel"] = "fn"
         }
@@ -314,8 +313,8 @@ func listenMic() -> MicrophoneDevice? {
 // Opens only the chosen mic. AVAudioEngine opens the default input first, which flips Bluetooth headphones into call mode and keeps them there.
 final class Mic: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     private var session: AVCaptureSession?, onBuffer: ((AVAudioPCMBuffer) -> Void)?
-    private let queue = DispatchQueue(label: "atticus.mic")
-    private static let sessionQueue = DispatchQueue(label: "atticus.mic.session")   // serialize device release before another Mic opens it
+    private let queue = DispatchQueue(label: "aurel.mic")
+    private static let sessionQueue = DispatchQueue(label: "aurel.mic.session")   // serialize device release before another Mic opens it
     private var generation = 0
     private(set) var isRunning = false
     func start(_ device: AVCaptureDevice, sampleRate: Double, _ onBuffer: @escaping (AVAudioPCMBuffer) -> Void, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -360,8 +359,8 @@ final class Mic: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     }
 }
 // MARK: Parakeet
-// Settings → Speech model → Parakeet: NVIDIA's Parakeet on the Neural Engine, through the atticus-parakeet helper (parakeet/, FluidAudio)
-// that build.sh puts next to Atticus. The helper skips audio with no voice in it, so silence never turns into words.
+// Settings → Speech model → Parakeet: NVIDIA's Parakeet on the Neural Engine, through the aurel-parakeet helper (parakeet/, FluidAudio)
+// that build.sh puts next to Aurel. The helper skips audio with no voice in it, so silence never turns into words.
 // The mic's 16 kHz mono Float32 samples for it, filled on the mic queue and read while the key is held.
 final class ParakeetAudio: @unchecked Sendable {
     private let lock = NSLock(); private var samples: [Float] = []
@@ -375,7 +374,7 @@ final class ParakeetAudio: @unchecked Sendable {
     func take() -> [Float] { lock.lock(); defer { samples = []; lock.unlock() }; return samples }
 }
 
-// Owns one `atticus-parakeet serve` on pipes: it exits when Atticus closes them or dies (no orphans), and the idle time in
+// Owns one `aurel-parakeet serve` on pipes: it exits when Aurel closes them or dies (no orphans), and the idle time in
 // Settings stops it; the next key-down starts it again in ~0.3 s. Requests run one at a time on `queue`, so answers come back in order.
 final class Parakeet: @unchecked Sendable {
     static let shared = Parakeet()
@@ -386,8 +385,8 @@ final class Parakeet: @unchecked Sendable {
     static var dir: String { (Prefs.path as NSString).deletingLastPathComponent + "/parakeet" }
     static func marker(_ m: Model) -> String { dir + "/" + m.id }   // the helper writes the model's folder here once it is downloaded
     static let cache = NSHomeDirectory() + "/Library/Application Support/FluidAudio/Models/"   // where FluidAudio keeps models
-    static func helperPath() -> String? {   // next to Atticus in the app; tests point ATTICUS_PARAKEET at another one
-        let p = ProcessInfo.processInfo.environment["ATTICUS_PARAKEET"] ?? ((Bundle.main.executablePath ?? "") as NSString).deletingLastPathComponent + "/atticus-parakeet"
+    static func helperPath() -> String? {   // next to Aurel in the app; tests point AUREL_PARAKEET at another one
+        let p = ProcessInfo.processInfo.environment["AUREL_PARAKEET"] ?? ((Bundle.main.executablePath ?? "") as NSString).deletingLastPathComponent + "/aurel-parakeet"
         return FileManager.default.isExecutableFile(atPath: p) ? p : nil
     }
     struct Failed: LocalizedError { let errorDescription: String?; init(_ why: String) { errorDescription = why } }
@@ -407,7 +406,7 @@ final class Parakeet: @unchecked Sendable {
         }
     }
     private struct Download { let proc: Process; var progress = 0.0, pinged = Date.distantPast, why = "", rest = "" }
-    private let lock = NSLock(), queue = DispatchQueue(label: "atticus.parakeet")
+    private let lock = NSLock(), queue = DispatchQueue(label: "aurel.parakeet")
     private var conn: Conn?, serving: String?, up: Task<Bool, Never>?, idle: DispatchWorkItem?
     private var helper: String?, have: Set<String> = [], downloads: [String: Download] = [:], error: String?
 
@@ -435,7 +434,7 @@ final class Parakeet: @unchecked Sendable {
                     ["id": m.id, "name": m.name, "size": m.size, "have": have.contains(m.id), "progress": downloads[m.id].map { $0.progress as Any } ?? NSNull()] }]
     }
 
-    // `atticus-parakeet download` fetches the model and its voice detector, readies them for the Neural Engine, then writes the
+    // `aurel-parakeet download` fetches the model and its voice detector, readies them for the Neural Engine, then writes the
     // marker: a half download never looks installed.
     func download(_ id: String, changed: @escaping @Sendable () -> Void) {
         guard let m = Self.models.first(where: { $0.id == id }), let bin = Self.helperPath() else { return }
@@ -506,11 +505,11 @@ final class Parakeet: @unchecked Sendable {
         if let up, let conn, conn.proc.isRunning, serving == m.id { return (up, conn) }
         guard let bin = Self.helperPath() else { throw Failed("The Parakeet helper is missing. Run ./build.sh again.") }
         guard FileManager.default.fileExists(atPath: Self.marker(m)) else { throw Failed("The \(m.name) model isn’t downloaded.") }
-        up?.cancel(); conn?.proc.terminate()   // only the helper this Atticus started
+        up?.cancel(); conn?.proc.terminate()   // only the helper this Aurel started
         let p = Process(), i = Pipe(), o = Pipe()
         p.executableURL = URL(fileURLWithPath: bin); p.arguments = ["serve", m.id]
         p.standardInput = i; p.standardOutput = o; p.standardError = FileHandle.nullDevice
-        fcntl(i.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)   // a helper that quit makes the write throw, not kill Atticus
+        fcntl(i.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)   // a helper that quit makes the write throw, not kill Aurel
         try p.run()
         let c = Conn(p, i.fileHandleForWriting, o.fileHandleForReading), q = queue
         conn = c; serving = m.id
@@ -519,7 +518,7 @@ final class Parakeet: @unchecked Sendable {
     }
     private func touch() {   // caller holds lock
         idle?.cancel(); idle = nil
-        guard let after = Prefs.unloadAfter() else { return }   // Never: stays loaded until Atticus quits
+        guard let after = Prefs.unloadAfter() else { return }   // Never: stays loaded until Aurel quits
         let w = DispatchWorkItem { [weak self] in self?.stop() }
         idle = w; DispatchQueue.main.asyncAfter(deadline: .now() + after, execute: w)
     }
@@ -545,9 +544,9 @@ final class Parakeet: @unchecked Sendable {
 // MARK: end Parakeet
 // MARK: Local AI
 import CryptoKit   // here, not at the top: tests compile slices of this file that include this block
-// Settings → Intelligence → Local: llama.cpp's llama-server and one GGUF model, both downloaded once by Atticus (checksum-pinned)
-// into ~/.config/atticus/llm. Nothing else to install. Atticus runs the server on a free 127.0.0.1 port and gives atticus.py
-// its address as ATTICUS_LLM. A tiny sh wrapper kills it when Atticus dies (no orphans); the idle time in Settings stops it too.
+// Settings → Intelligence → Local: llama.cpp's llama-server and one GGUF model, both downloaded once by Aurel (checksum-pinned)
+// into ~/.config/aurel/llm. Nothing else to install. Aurel runs the server on a free 127.0.0.1 port and gives aurel.py
+// its address as AUREL_LLM. A tiny sh wrapper kills it when Aurel dies (no orphans); the idle time in Settings stops it too.
 final class LocalAI: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     static let shared = LocalAI()
     struct Model { let id, name, url, file, sha256: String; let bytes: Int64 }
@@ -573,6 +572,8 @@ final class LocalAI: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private struct Download { let task: URLSessionDownloadTask, changed: @Sendable () -> Void; var progress = 0.0, pinged = Date.distantPast }
     private let lock = NSLock()
     private var proc: Process?, port = 0, serving: String?, idle: DispatchWorkItem?
+    private struct User { weak var p: Process? }
+    private var users: [User] = [], used = Date()   // foreground workers using the server: idle time starts when the last one ends
     private var hasRuntime = false, have: Set<String> = [], downloads: [String: Download] = [:], error: String?
     private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)   // touched under lock
 
@@ -685,13 +686,14 @@ final class LocalAI: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
         return h.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    // The server's address for atticus.py, starting it if needed; atticus.py waits for /health. Empty when nothing is downloaded.
+    // The server's address for aurel.py, starting it if needed; aurel.py waits for /health. Empty when nothing is downloaded.
     func address() -> String { (try? ensure()).map { "http://127.0.0.1:\($0)" } ?? "" }
     func restart() { lock.lock(); let was = proc != nil; lock.unlock(); stop(); if was { _ = address() } }   // only a running server moves to the new model
     func stop() {
         lock.lock(); defer { lock.unlock() }
         idle?.cancel(); idle = nil
         proc?.terminate(); proc = nil; serving = nil   // the wrapper's trap takes its server down with it
+        try? FileManager.default.removeItem(atPath: Self.dir + "/address")
     }
 
     private func ensure() throws -> Int {
@@ -702,7 +704,7 @@ final class LocalAI: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
         guard FileManager.default.isExecutableFile(atPath: Self.server) else { throw Failed("llama.cpp isn’t downloaded.") }
         guard FileManager.default.fileExists(atPath: file) else { throw Failed("The \(m.name) model isn’t downloaded.") }
         guard let free = Self.freePort() else { throw Failed("No free port for the local model.") }
-        proc?.terminate()   // only the server this Atticus started
+        proc?.terminate()   // only the server this Aurel started
         let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/sh")
         // Two slots, so the router's prompt and the full ask's each stay cached; -c: 16K each for the prompt, window text and
         // a few steps. Thinking off: a voice ask can't wait for it.
@@ -715,13 +717,25 @@ final class LocalAI: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
         p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
         try p.run()
         proc = p; port = free; serving = m.id
+        try? "http://127.0.0.1:\(free)".write(toFile: Self.dir + "/address", atomically: true, encoding: .utf8)   // local agents outlive one server: they re-read it
         return free
     }
-    private func touch() {   // caller holds lock
+    func use(_ p: Process) { lock.withLock { users.append(User(p: p)) } }
+    private func touch() { used = Date(); arm() }   // caller holds lock
+    private func arm() {   // caller holds lock; looks every 20 s at most, so a long ask keeps the server it is using
         idle?.cancel(); idle = nil
-        guard let after = Prefs.unloadAfter() else { return }   // Never: stays loaded until Atticus quits
-        let w = DispatchWorkItem { [weak self] in self?.stop() }
-        idle = w; DispatchQueue.main.asyncAfter(deadline: .now() + after, execute: w)
+        guard let after = Prefs.unloadAfter() else { return }   // Never: stays loaded until Aurel quits
+        let w = DispatchWorkItem { [weak self] in self?.idleCheck(after) }
+        idle = w; DispatchQueue.main.asyncAfter(deadline: .now() + min(after, 20), execute: w)
+    }
+    private func idleCheck(_ after: TimeInterval) {
+        lock.lock()
+        if users.contains(where: { $0.p?.isRunning == true }) { used = Date() }
+        users.removeAll { $0.p.map { $0.processIdentifier != 0 && !$0.isRunning } ?? true }   // ended; one not started yet stays
+        let quiet = Date().timeIntervalSince(used) >= after
+        if !quiet { arm() }
+        lock.unlock()
+        if quiet { stop() }
     }
     static func freePort() -> Int? {   // the kernel picks an unused port; the server binds it right after
         let s = socket(AF_INET, SOCK_STREAM, 0); guard s >= 0 else { return nil }
@@ -812,7 +826,7 @@ final class AudioQuiet {
 }
 enum AudioRecovery {
     static var marker: URL?
-    static let prefix = ".atticus-audio-"
+    static let prefix = ".aurel-audio-"
     static var folder: URL { URL(fileURLWithPath: (Prefs.path as NSString).deletingLastPathComponent, isDirectory: true) }
     static func read(_ url: URL) -> AudioVolumeSnapshot? { try? JSONDecoder().decode(AudioVolumeSnapshot.self, from: Data(contentsOf: url)) }
     static func restore(_ url: URL) {
@@ -907,12 +921,13 @@ func preferredReadAloudVoice(_ selections: [Any], voices: [ReadAloudVoice], name
     let saved = [base(language), "en"].compactMap { byLanguage[$0] }   // the answer's language first, then English
     for id in saved {
         if let voice = voices.first(where: { $0.identifier == id }), let name = sayName(voice) { return name }
+        if id == byLanguage[base(language)], base(language) != "en" { return "" }   // the answer's language saved as a voice say can't name (Siri): the system's, not an English one
     }
     if !saved.isEmpty && majorVersion < 27 { return "" }
     let usable = voices.filter { sayName($0) != nil }
     return bestEnglishVoice(usable, region: region).flatMap { sayName($0) }
 }
-// Listed once per launch, as before: a voice downloaded later is used after Atticus relaunches.
+// Listed once per launch, as before: a voice downloaded later is used after Aurel relaunches.
 let installedSayVoices: Set<String>? = {
     let p = Process(), out = Pipe()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/say"); p.arguments = ["-v", "?"]; p.standardOutput = out
@@ -939,11 +954,11 @@ func readAloudArguments(_ words: String, pick: (String) -> String? = usableReadA
 
 // The talk shortcut, any key plus modifiers, recorded in Settings: Carbon modifiers to register, and the
 // modifier keys whose release ends listening (none for a lone F-key: its own key-up ends it).
-let atticusFnKey = 1 << 20   // Carbon has no Fn bit; Fn shortcuts use the event monitor below.
+let aurelFnKey = 1 << 20   // Carbon has no Fn bit; Fn shortcuts use the event monitor below.
 func shortcutModifiers(_ f: NSEvent.ModifierFlags) -> Int {
     (f.contains(.command) ? cmdKey : 0) | (f.contains(.shift) ? shiftKey : 0) |
     (f.contains(.option) ? optionKey : 0) | (f.contains(.control) ? controlKey : 0) |
-    (f.contains(.function) ? atticusFnKey : 0)
+    (f.contains(.function) ? aurelFnKey : 0)
 }
 func shortcutModifierLabel(_ f: NSEvent.ModifierFlags) -> String {
     (f.contains(.function) ? "fn" : "") + (f.contains(.control) ? "⌃" : "") +
@@ -954,7 +969,7 @@ func configuredHotkey(_ stem: String = "hotkey") -> (code: Int, mods: Int, flags
     var f: NSEvent.ModifierFlags = []
     if m & cmdKey != 0 { f.insert(.command) }; if m & shiftKey != 0 { f.insert(.shift) }
     if m & optionKey != 0 { f.insert(.option) }; if m & controlKey != 0 { f.insert(.control) }
-    if m & atticusFnKey != 0 { f.insert(.function) }
+    if m & aurelFnKey != 0 { f.insert(.function) }
     return (Int(Prefs.num(stem + "Code")), m, f)
 }
 func hotkey() -> (code: Int, mods: Int, flags: NSEvent.ModifierFlags) { configuredHotkey() }
@@ -963,7 +978,7 @@ func dictateHotkey() -> (code: Int, mods: Int, flags: NSEvent.ModifierFlags) { c
 // 0 is Do Nothing; unset means the system default action.
 func globeKeyTaken() -> Bool {
     let h = dictateHotkey(), domain = "com.apple.HIToolbox" as CFString
-    guard !Prefs.str("dictateHotkeyLabel").isEmpty, h.code < 0, h.mods == atticusFnKey else { return false }
+    guard !Prefs.str("dictateHotkeyLabel").isEmpty, h.code < 0, h.mods == aurelFnKey else { return false }
     CFPreferencesAppSynchronize(domain)
     return (CFPreferencesCopyAppValue("AppleFnUsageType" as CFString, domain) as? Int ?? 1) != 0
 }
@@ -1003,18 +1018,21 @@ final class SpeechInputs: @unchecked Sendable {
     }
 }
 
-// atticus.py with whatever python3 this Mac has (Homebrew's first, else Apple's); its sh header runs it from cached bytecode.
+// aurel.py with whatever python3 this Mac has (Homebrew's first, else Apple's); its sh header runs it from cached bytecode.
 func py(_ args: [String], _ extra: [String: String] = [:]) -> Process {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/bin/sh")
-    p.arguments = [dir + "/atticus.py"] + args
+    p.arguments = [dir + "/aurel.py"] + args
     var env = ProcessInfo.processInfo.environment
     env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
-    env["ATTICUS_APP"] = Bundle.main.executablePath
+    env["AUREL_APP"] = Bundle.main.executablePath
     // the workers that think get the local model's address; asking for it starts the server, so others don't
     let thinks = ["--wait", "--dictate-cleanup-wait", "--agents"]
-    if Prefs.str("client") == "local", let first = args.first, thinks.contains(first) { env["ATTICUS_LLM"] = LocalAI.shared.address() }
-    if Prefs.str("client") == "local", LocalAI.shared.ready { env["ATTICUS_LLM_READY"] = "1" }   // setup checks: nothing left to download
+    if Prefs.str("client") == "local", let first = args.first, thinks.contains(first) {
+        env["AUREL_LLM"] = LocalAI.shared.address()
+        if first != "--agents" { LocalAI.shared.use(p) }   // agents keep it loaded their own way (Agents.tick)
+    }
+    if Prefs.str("client") == "local", LocalAI.shared.ready { env["AUREL_LLM_READY"] = "1" }   // setup checks: nothing left to download
     env.merge(extra) { $1 }
     p.environment = env
     return p
@@ -1027,18 +1045,6 @@ func telemetry(_ args: [String]) {
     try? p.run()   // its curl child outlives this helper; never wait on an ask
 }
 
-// Call a page function with JSON arguments: fn(...args). Skips values JSON can't hold (they would raise in JSONSerialization).
-func callJS(_ web: WKWebView?, _ fn: String, _ args: [Any]) {
-    guard JSONSerialization.isValidJSONObject(args), let d = try? JSONSerialization.data(withJSONObject: args), let j = String(data: d, encoding: .utf8) else { return }
-    web?.evaluateJavaScript("\(fn)(...\(j))")
-}
-
-// Load ui/<name> with orbs.js inlined at its /*ORBS*/ marker.
-func loadPage(_ web: WKWebView, _ name: String) {
-    let html = (try? String(contentsOfFile: dir + "/ui/" + name, encoding: .utf8)) ?? "missing " + name
-    let orbs = (try? String(contentsOfFile: dir + "/ui/orbs.js", encoding: .utf8)) ?? ""
-    web.loadHTMLString(html.replacingOccurrences(of: "/*ORBS*/", with: orbs), baseURL: nil)
-}
 
 // The screen under the mouse, else the main one.
 var mouseScreen: NSScreen { NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main! }
@@ -1173,7 +1179,7 @@ struct TextSelection {
                   NSWorkspace.shared.frontmostApplication == app else { done(false); return }
             guard let down = CGEvent(keyboardEventSource: nil, virtualKey: draft.isEmpty ? 51 : 9, keyDown: true),
                   let up = CGEvent(keyboardEventSource: nil, virtualKey: draft.isEmpty ? 51 : 9, keyDown: false) else { done(false); return }
-            // One clipboard borrower at a time across Atticus processes; while a hands helper pastes, check again shortly.
+            // One clipboard borrower at a time across Aurel processes; while a hands helper pastes, check again shortly.
             let clipboard = draft.isEmpty ? nil : try? Hands.lease("clipboard.lock", wait: false)
             if !draft.isEmpty && clipboard == nil {
                 if attempt < 40 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { paste(attempt + 1) } } else { done(false) }
@@ -1191,7 +1197,7 @@ struct TextSelection {
         }
         let fallback = {
             if preserveFocus { paste() }
-            else {   // Atticus may be front (the user clicked its box): wait up to 1 s for the target app to come back
+            else {   // Aurel may be front (the user clicked its box): wait up to 1 s for the target app to come back
                 app.activate()
                 func ready(_ tries: Int) { NSWorkspace.shared.frontmostApplication == app || tries >= 20 ? paste() : DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { ready(tries + 1) } }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { ready(0) }
@@ -1322,7 +1328,7 @@ final class DrawingView: NSView {
         super.updateTrackingAreas(); trackingAreas.forEach(removeTrackingArea)
         if inputStart != nil { addTrackingArea(NSTrackingArea(rect:.zero,options:[.activeAlways,.mouseMoved,.mouseEnteredAndExited,.cursorUpdate,.inVisibleRect],owner:self)) }
     }
-    override func cursorUpdate(with event: NSEvent) { if pointing { NSCursor.crosshair.set() } else { super.cursorUpdate(with:event) } }   // Atticus never activates, so set it on every move too
+    override func cursorUpdate(with event: NSEvent) { if pointing { NSCursor.crosshair.set() } else { super.cursorUpdate(with:event) } }   // Aurel never activates, so set it on every move too
     override func mouseEntered(with event: NSEvent) { if pointing { NSCursor.crosshair.set() } }
     override func mouseMoved(with event: NSEvent) { inputHover?(inputPoint(event)); if pointing { NSCursor.crosshair.set() } }
     override func mouseExited(with event: NSEvent) { inputHover?(nil) }
@@ -1747,7 +1753,7 @@ final class ScreenDrawing {
             panel.isReleasedWhenClosed = false
             panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false; panel.ignoresMouseEvents = false; panel.acceptsMouseMovedEvents = true
             panel.hidesOnDeactivate = false; panel.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary,.ignoresCycle]
-            panel.level = NSWindow.Level(rawValue:NSWindow.Level.statusBar.rawValue - 1)   // under Atticus's own panels even after a click raises it: the box, its cards and buttons take their clicks
+            panel.level = NSWindow.Level(rawValue:NSWindow.Level.statusBar.rawValue - 1)   // under Aurel's own panels even after a click raises it: the box, its cards and buttons take their clicks
             applySharing(panel)
             let view = DrawingView(frame:CGRect(origin:.zero,size:screen.frame.size)); view.origin = CGDisplayBounds(displayID).origin
             view.inputStart = { [weak self] in self?.startInput($0) }
@@ -1926,7 +1932,7 @@ final class ScreenDrawing {
     }
 }
 
-// The box can take typing (canBecomeKey) without pulling Atticus forward (nonactivating): the user's app stays in front.
+// The box can take typing (canBecomeKey) without pulling Aurel forward (nonactivating): the user's app stays in front.
 final class KeyPanel: NSPanel { override var canBecomeKey: Bool { true } }
 
 // Mini screen: local window-only buffers stay in a native layer, underneath the transparent web controls.
@@ -1959,10 +1965,10 @@ final class MiniScreen: NSObject, SCStreamOutput, SCStreamDelegate {
         guard (try? p.run()) != nil else { p.terminationHandler = nil; return }
         DispatchQueue.global().asyncAfter(deadline: .now() + 2, execute: timeout)
     }
-    static var workInFront: Bool { Prefs.str("workIn") == "front" || ProcessInfo.processInfo.environment["ATTICUS_FOCUS_REQUESTED"] == "1" }
+    static var workInFront: Bool { Prefs.str("workIn") == "front" || ProcessInfo.processInfo.environment["AUREL_FOCUS_REQUESTED"] == "1" }
     static func work(_ app: NSRunningApplication) {
         guard workInFront, NSWorkspace.shared.frontmostApplication != app else { return }
-        DistributedNotificationCenter.default().postNotificationName(.init("atticus.raise"), object: "user", deliverImmediately: true)
+        DistributedNotificationCenter.default().postNotificationName(.init("aurel.raise"), object: "user", deliverImmediately: true)
         usleep(50_000); activate(app.processIdentifier)
     }
     static func bounds(_ info: [String:Any]) -> CGRect? {
@@ -2180,12 +2186,12 @@ func boxWidth(_ saved: Double, _ bounds: NSRect) -> CGFloat {
     min(CGFloat(min(900, max(340, saved.isFinite ? saved : 500))), bounds.width - 16)
 }
 
-final class App: NSObject, WKScriptMessageHandler {
+final class App: NSObject {
     let mini = MiniScreen()
     let quietAudio = AudioQuiet(layer: CoreAudioVolume(), changed: AudioRecovery.changed)
     let panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: boxWidth(Prefs.num("boxW"), mouseScreen.visibleFrame), height: 76),
                         styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
-    let web: WKWebView
+    let boxModel: BoxModel, boxView: NSHostingView<BoxView>   // the box (Box.swift): the model takes each call, the view draws it
     let engine = Mic()
     // Speech: Apple's SpeechAnalyzer (macOS 26+), on-device and free; punctuates and capitalizes.
     var feed: AsyncStream<AnalyzerInput>.Continuation?, analyzer: SpeechAnalyzer?, reading: Task<Void, Never>?
@@ -2210,8 +2216,15 @@ final class App: NSObject, WKScriptMessageHandler {
     var wakeTask: SFSpeechRecognitionTask?, wakeRequest: SFSpeechAudioBufferRecognitionRequest?
     var wakeID = 0, wakeRetry = Date.distantPast, wakeBegan = Date.distantPast, wakeDevice = ""
     var wakeBackoff = 1.0, wakePermissionID = 0, wakeWhy = "?"
+    // "Aurel" is rare, so the recognizer is told to expect it, and the ways it spells the name count too: Aural, Orel, Oriel,
+    // Aurelle… anywhere; words people say anyway (oral, Laurel, Ariel) only right after a greeting: "hey Laurel".
     static func hasWakeWord(_ text: String) -> Bool {
-        text.range(of: #"(?i)(?<![\p{L}\p{N}_])atticus(?![\p{L}\p{N}_])"#, options: .regularExpression) != nil
+        text.range(of: #"(?i)(?<![\p{L}\p{N}_])(?:(?:au|o)r{1,2}(?:e|ie|ea)l{1,2}e?|aural|(?:hey|hi|ok|okay|yo),? (?:oral|laurel|ariel|arial|or el|our el))(?:['’]s)?(?![\p{L}\p{N}_])"#, options: .regularExpression) != nil
+    }
+    // A hands-free chat ends when the whole utterance says so ("close", "that's all, thanks"); "close Safari" is still an ask.
+    static func endsChat(_ text: String) -> Bool {
+        let words = text.lowercased().replacingOccurrences(of: "’", with: "'").components(separatedBy: CharacterSet.letters.union(.init(charactersIn: "'")).inverted).filter { !$0.isEmpty }.joined(separator: " ")
+        return words.range(of: #"^(?:(?:ok|okay|thanks|thank you|hey|aurel) )*(?:close|close it|stop|stop listening|goodbye|bye|bye bye|that's all|that's it|i'm done|we're done|nothing else|never mind|nevermind)(?: (?:thanks|thank you|aurel))*$"#, options: .regularExpression) != nil
     }
     func stopWake() {
         wakeID += 1
@@ -2233,7 +2246,9 @@ final class App: NSObject, WKScriptMessageHandler {
             ("speaking", voice?.isRunning == true || drawing.voice?.isRunning == true), ("sound", cueSound?.isPlaying == true || Date() < cueEnds),
             ("onboarding", onboarding.win != nil), ("mic permission", AVCaptureDevice.authorizationStatus(for: .audio) != .authorized),
             ("speech permission", SFSpeechRecognizer.authorizationStatus() != .authorized)]
-        let why = waits.first { $0.1 }?.0 ?? ""
+        // A hands-free follow-up opens the mic itself: an empty focused Ask field (typing hushes it), the wake word setting
+        // and Apple speech permission (Parakeet needs none; start() checks) are the wake listener's waits, not its.
+        let why = waits.first { $0.1 && !(handsFree && followUp && ["off", "box", "typing", "speech permission"].contains($0.0)) }?.0 ?? ""
         if why != wakeWhy { wakeWhy = why; NSLog("Wake word: %@", why.isEmpty ? "listening" : "waits (\(why))") }   // app.err shows why it is not listening
         guard why.isEmpty else {
             if wakeRequest != nil { stopWake() }; return
@@ -2251,13 +2266,13 @@ final class App: NSObject, WKScriptMessageHandler {
               let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
               recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else { NSLog("Wake word: no on-device recognizer or mic, retry in 30 s"); wakeRetry = Date().addingTimeInterval(30); return }
         let request = SFSpeechAudioBufferRecognitionRequest()
-        request.requiresOnDeviceRecognition = true; request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = true; request.shouldReportPartialResults = true; request.contextualStrings = ["Aurel", "Hey Aurel"]
         wakeRecognizer = recognizer; wakeRequest = request; wakeID += 1; let id = wakeID
         wakeBegan = Date(); wakeDevice = device.uniqueID
         wakeTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             DispatchQueue.main.async { [weak self] in
                 guard let self, wakeID == id else { return }
-                if let result, Self.hasWakeWord(result.bestTranscription.formattedString) {
+                if let result, result.transcriptions.contains(where: { Self.hasWakeWord($0.formattedString) }) {   // its other guesses too: a rare name is often second
                     wakeBackoff = 1
                     stopWake(); handsFree = true; clickMicrophone()
                 } else if error != nil || result?.isFinal == true {
@@ -2279,12 +2294,12 @@ final class App: NSObject, WKScriptMessageHandler {
             let speech = SFSpeechRecognizer.authorizationStatus() == .authorized
             if !mic || !speech {
                 Prefs.set("wakeWord", false)
-                Atticus.settings.send("notice", ["text": "Allow Atticus in System Settings → Privacy & Security → \(mic ? "Speech Recognition" : "Microphone")."])
+                Aurel.settings.send("notice", ["text": "Allow Aurel in System Settings → Privacy & Security → \(mic ? "Speech Recognition" : "Microphone")."])
             } else if SFSpeechRecognizer(locale: Locale(identifier: "en-US"))?.supportsOnDeviceRecognition != true {
                 Prefs.set("wakeWord", false)
-                Atticus.settings.send("notice", ["text": "On-device Speech Recognition is unavailable on this Mac."])
+                Aurel.settings.send("notice", ["text": "On-device Speech Recognition is unavailable on this Mac."])
             }
-            Atticus.settings.push(); wakeTick()
+            Aurel.settings.push(); wakeTick()
         } }
         let speech: () -> Void = {
             if SFSpeechRecognizer.authorizationStatus() == .notDetermined { SFSpeechRecognizer.requestAuthorization { _ in finish() } }
@@ -2297,7 +2312,7 @@ final class App: NSObject, WKScriptMessageHandler {
     // closes on a pause after 25 s (hard at 30 s) so each pass stays short. Final passes queue on parakeetChain, in order.
     let parakeetAudio = ParakeetAudio()
     var parakeetListen = false, parakeetBusy = false, parakeetAsk = 0, parakeetSent = 0.0, parakeetQueued = 0.0
-    var parakeetAsked = Date.distantPast, parakeetVoice = Date.distantPast, parakeetChain: Task<Void, Never>?
+    var parakeetAsked = Date.distantPast, parakeetVoice = Date.distantPast, wordsChanged = Date.distantPast, parakeetChain: Task<Void, Never>?
     // Settings → Speech model: Apple's newer SpeechTranscriber, or the Dictation model the keyboard mic uses.
     // Dictation drops fastResults / frequentFinalization (Apple: faster but less accurate); asks keep them for live commands.
     func speechModule(dictate: Bool = false) -> any SpeechModule {
@@ -2342,9 +2357,9 @@ final class App: NSObject, WKScriptMessageHandler {
     var dictatePressed = Date.distantPast, dictateTap: DispatchWorkItem?   // dictateTap: a quick tap waiting to see if a second one locks
     var dictateSelection: TextSelection?, dictationTargetApp: NSRunningApplication?, dictateProcess: Process?, dictateInput: FileHandle?, dictateOutput: FileHandle?, dictateID = 0, dictateBefore = ""
     var dictateSelectionRetried = false
-    var askFile = ""   // safe mode: where the Allow / Don't Allow answer goes (atticus.py's gate waits on it)
+    var askFile = ""   // safe mode: where the Allow / Don't Allow answer goes (aurel.py's gate waits on it)
     var askNeed: [String:Any] = [:]
-    var agentMoveFile = "" { didSet { moveKey() } }   // set while atticus.py watches it: the running ask can move to an agent
+    var agentMoveFile = "" { didSet { moveKey() } }   // set while aurel.py watches it: the running ask can move to an agent
     var moveRef: EventHotKeyRef?
     var retryOffer = false, offerText: String?   // answering a choices or failure card preserves its original request
     var picking: Bool { retryOffer && askNeed["pick"] != nil }   // a choices card waits: the shortcut hides it while the user says the answer
@@ -2352,12 +2367,12 @@ final class App: NSObject, WKScriptMessageHandler {
     var screenFrames = NSScreen.screens.map(\.frame)   // last display layout; a change in it makes an on-screen drawing stale
     var selection: TextSelection?, replacement: String?, mode = "replace", warmSel = ""   // mode: replace · delete · draft
     var selectionID = 0, selectionPending = false, replacing = false
-    var mine = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""   // the app the user's in, never Atticus itself
+    var mine = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""   // the app the user's in, never Aurel itself
     var userApp = NSWorkspace.shared.frontmostApplication, guardUntil = Date.distantPast, allowUntil = Date.distantPast, userSwitch = Date.distantPast
     var allowUserApp = false
     var hiddenAtStart = Set<pid_t>()   // re-activating the user's app does not cover an app that unhid itself (an empty desktop shows it)
     func noteHidden() { hiddenAtStart = Set(NSWorkspace.shared.runningApplications.filter(\.isHidden).map(\.processIdentifier)) }
-    let focusFile = (Prefs.path as NSString).deletingLastPathComponent + "/focus"   // atticus.py touches it when the user asked to see an app
+    let focusFile = (Prefs.path as NSString).deletingLastPathComponent + "/focus"   // aurel.py touches it when the user asked to see an app
     var focusFree: Bool { (try? FileManager.default.attributesOfItem(atPath: focusFile)[.modificationDate] as? Date).map { Date().timeIntervalSince($0) < 60 } ?? false }
     static func focusGuardActive(busy: Bool, recording: Bool, now: Date, until: Date, focusFree: Bool, workInFront: Bool = false) -> Bool {
         !workInFront && (busy || recording || now < until) && !focusFree
@@ -2369,7 +2384,7 @@ final class App: NSObject, WKScriptMessageHandler {
     let recent = (Prefs.path as NSString).deletingLastPathComponent + "/recent.jsonl"
     // ⌘-Tab, a Space swipe and Spotlight never reach a global event monitor, so the guard took them for an app jumping forward and pulled
     // the user back. Hardware ⌘/⌥ releases, clicks and gestures in the last second mean the user switched; plain typing does not.
-    // Letting go of Atticus's own ⌃⌥ shortcut is a modifier change too, so one within 0.6 s of that release is not a switch.
+    // Letting go of Aurel's own ⌃⌥ shortcut is a modifier change too, so one within 0.6 s of that release is not a switch.
     static var keysUp = Date.distantPast
     static func userJustSwitched() -> Bool {
         let ours = Date().timeIntervalSince(keysUp)
@@ -2410,7 +2425,7 @@ final class App: NSObject, WKScriptMessageHandler {
         let config = (Prefs.path as NSString).deletingLastPathComponent
         let shortcuts = (try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: config + "/skills.json")))) as? [String: Any] ?? [:]
         var seen = Set<String>()
-        return Array((DictationData.words + ["Atticus", profileName(config + "/me.json")] + shortcuts.keys.sorted() +
+        return Array((DictationData.words + ["Aurel", profileName(config + "/me.json")] + shortcuts.keys.sorted() +
         [NSHomeDirectory() + "/Applications", "/Applications", "/System/Applications", "/System/Applications/Utilities"].flatMap {
             ((try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? []).filter { $0.hasSuffix(".app") }.map { String($0.dropLast(4)) }
         }).filter { !$0.isEmpty && seen.insert($0).inserted }.prefix(DictationData.words.count + 100))
@@ -2422,8 +2437,21 @@ final class App: NSObject, WKScriptMessageHandler {
     }
     func followUpSoon() {   // hands-free: listen again right when the done sound ends, not on the next 1 s tick
         guard followUp else { return }
-        if !Prefs.bool("speak") { js("quietListen", true) }   // show it with the done sound; the mic opens as the sound ends
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, cueEnds.timeIntervalSinceNow) + 0.05) { [weak self] in self?.wakeTick() }
+        DispatchQueue.main.async { [weak self] in self?.listenAgain() }   // at once, over the done sound: the next words start right away
+    }
+    // The next instruction: the mic opens here, not through the wake listener's waits (a focused Ask field, its own setting).
+    func listenAgain() {
+        guard handsFree, followUp, !busy, !engine.isRunning, !dictating, !Prefs.bool("paused") else { return }
+        if voice?.isRunning == true || drawing.voice?.isRunning == true {   // an answer still being spoken
+            return DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.listenAgain() }
+        }
+        followUp = false; stopWake(); clickMicrophone(quiet: true)
+    }
+    // The heard words still start with what Aurel acted on, maybe split differently ("Open" again as "O Pen"):
+    // how many words that is now, or nil when the words changed.
+    func actedWords() -> Int? {
+        let key = { (s: String) in transcriptKey(s).filter { $0.isLetter || $0.isNumber } }, want = key(consumedText), w = words()
+        return (0...w.count).first { key(w.prefix($0).joined(separator: " ")) == want }
     }
     func cue(_ k: String) { let n = Prefs.str(k); if n != "None" { sound(n, Float(Prefs.num("volume"))) } }   // soundStart / soundRelease / soundDone / soundStop
     let drawing = ScreenDrawing()
@@ -2496,7 +2524,7 @@ final class App: NSObject, WKScriptMessageHandler {
         let label = Hands.mask(Hands.name(element))
         return String("\(app.localizedName ?? "App") \(role)\(label.isEmpty ? "" : ": " + label)".prefix(500))
     }
-    // mark: one of Atticus's own marks the user clicked (points are its corners); the same context as a mark the user drew.
+    // mark: one of Aurel's own marks the user clicked (points are its corners); the same context as a mark the user drew.
     func finishPoint(_ points: [CGPoint], mark: String = "") {
         guard let first = points.first else { drawing.clearInput(); return }
         let screen = NSScreen.screens.first {
@@ -2508,7 +2536,7 @@ final class App: NSObject, WKScriptMessageHandler {
         let display = CGDisplayBounds(id), xs = points.map(\.x), ys = points.map(\.y)
         var region = CGRect(x:xs.min()!,y:ys.min()!,width:max(1,xs.max()!-xs.min()!),height:max(1,ys.max()!-ys.min()!)).insetBy(dx:-24,dy:-24)
         region = region.intersection(display)
-        let path = NSTemporaryDirectory() + "atticus-point-" + UUID().uuidString + ".jpg"
+        let path = NSTemporaryDirectory() + "aurel-point-" + UUID().uuidString + ".jpg"
         let capture = Process(); capture.executableURL = URL(fileURLWithPath:"/usr/sbin/screencapture")
         capture.arguments = ["-x","-R\(Int(region.minX)),\(Int(region.minY)),\(max(1,Int(region.width))),\(max(1,Int(region.height)))","-t","jpg",path]
         let capturing = (try? capture.run()) != nil
@@ -2547,8 +2575,10 @@ final class App: NSObject, WKScriptMessageHandler {
     }
 
     override init() {
-        let cfg = WKWebViewConfiguration()
-        web = WKWebView(frame: NSRect(x: 0, y: 0, width: boxWidth(Prefs.num("boxW"), mouseScreen.visibleFrame), height: 76), configuration: cfg)
+        let model = BoxModel(); boxModel = model
+        boxView = NSHostingView(rootView: BoxView(m: model))
+        boxView.frame = NSRect(x: 0, y: 0, width: boxWidth(Prefs.num("boxW"), mouseScreen.visibleFrame), height: 76)
+        boxView.sizingOptions = []   // the panel sizes itself from what the box reports
         super.init()
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)   // main-thread AX polls (mini screen, drawings, dictation learning): a hung app costs 0.5 s, not 6 s
         drawing.resolve = { label, state in try Hands.drawAnchor(label,state:state) }
@@ -2561,33 +2591,33 @@ final class App: NSObject, WKScriptMessageHandler {
         drawing.inputAway = { [weak self] in self?.finishPointing() }
         drawing.picked = { [weak self] r, words in self?.finishPoint([CGPoint(x:r.minX,y:r.minY),CGPoint(x:r.maxX,y:r.maxY)],mark:words) }
         drawing.changed = { [weak self] in self?.avoidDrawing() }
-        cfg.userContentController.add(self, name: "h")
-        cfg.userContentController.add(self, name: "c")
-        web.setValue(false, forKey: "drawsBackground")
-        web.autoresizingMask = [.width, .height]
-        let bg = NSVisualEffectView(frame: web.frame)
+        boxModel.post = { [weak self] in self?.handle($0) }
+        boxModel.onSize = { [weak self] in self?.size($0) }
+        boxModel.onMini = { [weak self] in self?.mini.layout($0) }
+        boxView.autoresizingMask = [.width, .height]
+        let bg = NSVisualEffectView(frame: boxView.frame)
         bg.material = .hudWindow; bg.state = .active; bg.wantsLayer = true; bg.autoresizingMask = [.width, .height]
         bg.appearance = NSAppearance(named: .darkAqua)   // stays dark over white pages, so the orb shows
         bg.layer?.cornerRadius = 18; bg.layer?.masksToBounds = true
         bg.maskImage = NSImage(size: NSSize(width: 37, height: 37), flipped: false) { NSColor.black.setFill(); NSBezierPath(roundedRect: $0, xRadius: 18, yRadius: 18).fill(); return true }
         bg.maskImage?.capInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18); bg.maskImage?.resizingMode = .stretch
-        let tint = NSView(frame:web.frame); tint.wantsLayer = true; tint.autoresizingMask = [.width,.height]
-        tint.layer?.backgroundColor = NSColor(calibratedRed:18/255,green:18/255,blue:20/255,alpha:0.85).cgColor   // light enough for the blur to show; measured over white it keeps small text AA (tests/contrast.html)
+        let tint = NSView(frame:boxView.frame); tint.wantsLayer = true; tint.autoresizingMask = [.width,.height]
+        tint.layer?.backgroundColor = NSColor(calibratedRed:18/255,green:18/255,blue:20/255,alpha:0.85).cgColor   // light enough for the blur to show; over white it keeps small text AA (tests/test_box_native.py)
         bg.addSubview(tint); bg.addSubview(mini.clip)
         mini.publish = { [weak self] value in self?.js("mini",value) }
         mini.captureAllowed = { agentsUI.mini.target == nil }
-        bg.addSubview(web)
-        let tracker = Tracker(frame: web.frame)
+        bg.addSubview(boxView)
+        let tracker = Tracker(frame: boxView.frame)
         tracker.autoresizingMask = [.width, .height]
         tracker.onMove = { [weak self] p in
             guard let self else { return }
             if !hovering { js("hover", true) }
             hovering = true
-            pointer("[\(p.x),\(web.frame.height - p.y)],\(overX(p) && edges(p) == nil)")   // the × is native's corner, wider than its dot
+            pointer(CGPoint(x: p.x, y: boxView.frame.height - p.y), overX: overX(p) && edges(p) == nil)   // the × is native's corner, wider than its dot
         }
         tracker.onExit = { [weak self] in
             guard let self else { return }
-            hovering = false; js("hover", false); pointer("[]")
+            hovering = false; js("hover", false); pointer(nil, overX: false)
             if !busy { hide(after: 3) }   // mouse gone for a few seconds = close
         }
         bg.addSubview(tracker)
@@ -2596,7 +2626,7 @@ final class App: NSObject, WKScriptMessageHandler {
         panel.level = .statusBar; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         applySharing(panel)
-        loadPage(web, "ui.html")
+        DispatchQueue.main.async { [weak self] in self?.handle(["ready": 1]) }   // the native box is ready at once
         // Click anywhere else closes the box once the answer is up; on the box: ✕ closes, elsewhere copies the answer.
         NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             guard let self, !handsFree, panel.isVisible, !busy, !engine.isRunning, !stuck, !drawing.active, !drawing.hasInput else { return }
@@ -2612,7 +2642,7 @@ final class App: NSObject, WKScriptMessageHandler {
                 let p = e.locationInWindow
                 if let ed = edges(p), !(overX(p) && !ed.r && !ed.t) { sizing = (NSEvent.mouseLocation, panel.frame, ed); fromTop = ed.t; pinned = true; dragging = true }
                 else if overX(p) { close(clear: true) }
-                else if p.y < compH { if !panel.isKeyWindow && replacement == nil { selection = TextSelection.capture() }; pinned = true; panel.makeKey(); panel.makeFirstResponder(web); return e }   // the typing box: a normal click; a waiting Insert/Replace keeps its target
+                else if p.y < compH { if !panel.isKeyWindow && replacement == nil { selection = TextSelection.capture() }; pinned = true; panel.makeKey(); panel.makeFirstResponder(boxView); return e }   // the typing box: a normal click; a waiting Insert/Replace keeps its target
                 else { if !pillOn { pinned = true }; grab = (NSEvent.mouseLocation, panel.frame.origin); moved = false; dragging = true }   // the pill is not a box to keep
             case .leftMouseDragged:
                 if let z = sizing {   // width from the side edges, height from the top/bottom; a corner does both
@@ -2633,7 +2663,7 @@ final class App: NSObject, WKScriptMessageHandler {
                 guard grab != nil else { return e }
                 grab = nil
                 if !moved {   // a click, not a drag: the page decides (answer = copy, anywhere else = type)
-                    panel.makeKey(); panel.makeFirstResponder(web)
+                    panel.makeKey(); panel.makeFirstResponder(boxView)
                     js("tap", [e.locationInWindow.x, panel.frame.height - e.locationInWindow.y])
                 }
             }
@@ -2659,7 +2689,7 @@ final class App: NSObject, WKScriptMessageHandler {
         NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] e in
             if e.type != .keyDown || e.modifierFlags.contains(.command) { self?.userSwitch = Date() }   // a click or ⌘-Tab: the user is choosing
         }
-        DistributedNotificationCenter.default().addObserver(forName: .init("atticus.raise"), object: nil, queue: .main) { [weak self] n in
+        DistributedNotificationCenter.default().addObserver(forName: .init("aurel.raise"), object: nil, queue: .main) { [weak self] n in
             self?.allowUntil = Date().addingTimeInterval(3)   // hands raise an app for a mouse click, then put the user's app back
             self?.allowUserApp = n.object as? String == "user"   // a voice focus request changes the user's app; a temporary hands raise does not
         }
@@ -2683,16 +2713,16 @@ final class App: NSObject, WKScriptMessageHandler {
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
     }
 
-    // The page reports its height; grow the box down from the top-left corner. "c": the typing box.
-    func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
-        if m.name == "c", let b = m.body as? [String: Any] {
+    // What the box asks for: copy, send, allow, a pick… (the page's "c" messages)
+    func handle(_ b: [String: Any]) {
+        do {
             if b["learnedUndo"] != nil, let word = learnedWord {
                 if DictationData.forget(word) {
                     learnedWord = nil; js("dictated", ["text": "Forgot that spelling", "ok": true]); hide(after: 2)
-                    Atticus.settings.send("dictation", DictationData.state())
+                    Aurel.settings.send("dictation", DictationData.state())
                 }
             }
-            if b["dictationHistory"] != nil { hide(after: 0); Atticus.settings.open(tab: "dictation") }
+            if b["dictationHistory"] != nil { hide(after: 0); Aurel.settings.open(tab: "dictation") }
             if let enabled = b["agentDefault"] as? Bool { defaultKey(enabled) }
             if let value = b["miniRect"] as? [String:Any] { mini.layout(value) }
             // a click on the mini screen = the user wants to see it: the focus guard stands aside
@@ -2727,20 +2757,20 @@ final class App: NSObject, WKScriptMessageHandler {
             if b["setup"] != nil { onboarding.open() }
             if b["workerRetry"] != nil, !busy { pinned = false; typed(text, keep: true) }
             if b["resume"] != nil {
-                Atticus.settings.apply("paused", false); Atticus.settings.push()
+                Aurel.settings.apply("paused", false); Aurel.settings.push()
                 if !Prefs.bool("paused") { js("paused", false); hide(after: 1.5) }
             }
             if b["replace"] != nil, !busy { applyReplacement() }
             if b["retry"] != nil, !busy, !engine.isRunning { typed(text, keep: true) }
             if let t = b["send"] as? String { typed(t, keep: true) }
             if b["point"] != nil { drawing.inputMode ? finishPointing() : startPointing() }
-            if b["pointClear"] != nil { if drawing.hasInput { drawing.clearInput() } else { clearPointContext() } }   // a drawn mark, or a selected one of Atticus's
+            if b["pointClear"] != nil { if drawing.hasInput { drawing.clearInput() } else { clearPointContext() } }   // a drawn mark, or a selected one of Aurel's
             if b["pointCoached"] != nil { Prefs.set("pointCoached", true) }
             if b["mic"] != nil && (!busy || retryOffer) && (!engine.isRunning || quietFollowUp) { if quietFollowUp { hush() }; clickMicrophone() }
             if b["ready"] != nil { js("size", Prefs.num("boxH")); if Prefs.bool("tips") && !Prefs.bool("pointCoached") { js("pointCoach") } }
-            if b["safe"] != nil { Prefs.set("safe", true); js("mode", true); Atticus.settings.push() }
+            if b["safe"] != nil { Prefs.set("safe", true); js("mode", true); Aurel.settings.push() }
             if let m = b["model"] as? String {   // picked in the box: the same setting Settings shows; a worker warmed on the old model goes
-                Atticus.settings.apply("routing", m); Atticus.settings.push()
+                Aurel.settings.apply("routing", m); Aurel.settings.push()
             }
             if let i = b["pick"] as? String, !askFile.isEmpty {
                 if retryOffer {
@@ -2748,13 +2778,14 @@ final class App: NSObject, WKScriptMessageHandler {
                 }
                 try? i.write(toFile: askFile, atomically: true, encoding: .utf8); askFile = ""
             }   // an index, or "" = none; failure cards also use r/n
-            if let k = b["off"] as? String, k == "tips" { Atticus.settings.apply(k, false); Atticus.settings.push() }   // a tip's own "Turn off"; never safe mode
-            if let v = b["improve"] as? Bool { Atticus.settings.apply("improve", v); Atticus.settings.push() }
-            if let item = b["memory"] as? [String: Any] { Atticus.settings.reveal(item) }   // a receipt's item: Settings → Memory, at that item
+            if let k = b["off"] as? String, k == "tips" { Aurel.settings.apply(k, false); Aurel.settings.push() }   // a tip's own "Turn off"; never safe mode
+            if let v = b["improve"] as? Bool { Aurel.settings.apply("improve", v); Aurel.settings.push() }
+            if let item = b["memory"] as? [String: Any] { Aurel.settings.reveal(item) }   // a receipt's item: Settings → Memory, at that item
             if let ok = b["allow"] as? Bool, !askFile.isEmpty { allow(ok) }
-            return
         }
-        let size = ((m.body as? [NSNumber]) ?? [m.body as? NSNumber].compactMap { $0 }).map { CGFloat($0.doubleValue) }
+    }
+    // The box reports its height (and the dictation pill its width); grow the box down from the top-left corner.
+    func size(_ size: [CGFloat]) {
         guard let h = size.last, h > 0 else { return }
         var f = panel.frame
         if !fromTop { f.origin.y = f.maxY - h }   // grows down from the top, unless the user is dragging the top edge
@@ -2769,18 +2800,11 @@ final class App: NSObject, WKScriptMessageHandler {
         if drawing.active && !stuck && !dragging { avoidDrawing() }   // grew onto a mark; a box the user placed waits for the next step
     }
 
-    func js(_ call: String, _ arg: Any? = nil) { callJS(web, "ui." + call, arg.map { [$0] } ?? []) }
-    var pointerNext: String?, pointerBusy = false, pointerHand = false
-    func pointer(_ args: String) {   // Atticus never activates, so WebKit runs no :hover or cursor in the box: the page marks .hot and says if the cursor is a hand
-        pointerNext = args
-        guard !pointerBusy else { return }   // one evaluation in flight; later moves coalesce into the newest
-        pointerNext = nil; pointerBusy = true
-        web.evaluateJavaScript("ui.pointer(\(args))") { [weak self] hand, _ in
-            guard let self else { return }
-            pointerBusy = false
-            if (hand as? Bool ?? false) != pointerHand { pointerHand.toggle(); (pointerHand ? NSCursor.pointingHand : NSCursor.arrow).set() }
-            if let next = pointerNext { pointer(next) }
-        }
+    func js(_ call: String, _ arg: Any? = nil) { boxModel.receive(call, arg ?? NSNull()) }
+    var pointerHand = false
+    func pointer(_ p: CGPoint?, overX: Bool) {   // Aurel never activates, so the box tracks the mouse itself: hover states, and whether the cursor is a hand
+        let hand = boxModel.pointer(p, overX: overX)
+        if hand != pointerHand { pointerHand = hand; (hand ? NSCursor.pointingHand : NSCursor.arrow).set() }
     }
 
     func modelChoices() -> [String: Any] {
@@ -2858,7 +2882,7 @@ final class App: NSObject, WKScriptMessageHandler {
         mini.reset()
         followTimer?.invalidate(); followTimer = nil
         panel.orderOut(nil); agentCard = ""; pinned = false; stuck = false; boxHome = nil; composing = false; js("compose", false); js("visible", false)
-        if hovering { hovering = false; js("hover", false); pointer("[]") }   // a hidden panel gets no mouseExited
+        if hovering { hovering = false; js("hover", false); pointer(nil, overX: false) }   // a hidden panel gets no mouseExited
         pill(false)
         if let r = escRef { UnregisterEventHotKey(r); escRef = nil }
     }
@@ -3046,7 +3070,7 @@ final class App: NSObject, WKScriptMessageHandler {
 
     func review(_ message: String) {
         hush(); js("msg", message)
-        pinned = true; panel.makeKey(); panel.makeFirstResponder(web); js("draft", text)
+        pinned = true; panel.makeKey(); panel.makeFirstResponder(boxView); js("draft", text)
     }
 
     func recordingLimit() {
@@ -3250,36 +3274,36 @@ final class App: NSObject, WKScriptMessageHandler {
         text = ""; ahead = ""; speechFailed = false; consumed = 0; consumedText = ""; liveRevised = false; did = []
         if !panel.isVisible && Date().timeIntervalSince(lastDone) > 300 { js("reset"); try? FileManager.default.removeItem(atPath: recent) }
         quietFollowUp = quiet
+        if !dictate { handsFree = true }   // a spoken ask is a conversation: after each answer it listens again until "close", ✕, Esc or quiet
         if !quiet { pill(dictate) }
         if !dictate {
             if !replying && Prefs.str("input") == "type" && !clickTalk {   // Settings: the shortcut opens the box ready to type
                 if composing && panel.isVisible { return dismiss() }   // pressed again = put it away
                 unwarm(); warm = spawn()
                 onboarding.tried(); show()
-                panel.makeKey(); panel.makeFirstResponder(web); js("compose", true)
+                panel.makeKey(); panel.makeFirstResponder(boxView); js("compose", true)
                 return
             }
         }
         toggleTalk = !clickTalk && !dictate && Prefs.str("talkMode") == "toggle"   // dictation locks with a double tap instead
         if !quiet { cue("soundStart") }
         if !dictate && (!replying || drawingReply) { unwarm(); warm = spawn() }
-        if quiet { js("quietListen", true) }
-        else {
+        if !quiet {
             hovering = false
             if dictate { js("listen", "dict") }
             else if replying && !drawingReply { js(picking ? "pickHear" : "draft", "") } else { js("listen"); if let s = selection { js("selected", s.text) } }   // talking about a drawing still shows the listening orb
             show()
         }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
-            if replying { stopOfferInput() } else { hush() }; js("msg", "Allow Atticus in System Settings → Privacy & Security → Microphone."); hide(after: 6); return
+            if replying { stopOfferInput() } else { hush() }; js("msg", "Allow Aurel in System Settings → Privacy & Security → Microphone."); hide(after: 6); return
         }
         let parakeet = Prefs.str("speechModel") == "parakeet"   // runs on this Mac outside Apple's speech service: no Speech Recognition permission
         guard !parakeet || Parakeet.shared.ready else {
             if replying { stopOfferInput() } else { hush() }; js("msg", "Parakeet isn’t set up yet. Open Settings → Dictation to download a model."); hide(after: 6)
-            Atticus.settings.open(tab: "dictation"); return
+            Aurel.settings.open(tab: "dictation"); return
         }
         guard parakeet || dictate || SFSpeechRecognizer.authorizationStatus() == .authorized else {
-            if replying { stopOfferInput() } else { hush() }; js("msg", "Allow Atticus in System Settings → Privacy & Security → Speech Recognition."); hide(after: 6); return
+            if replying { stopOfferInput() } else { hush() }; js("msg", "Allow Aurel in System Settings → Privacy & Security → Speech Recognition."); hide(after: 6); return
         }
         guard let device = listenMic().flatMap({ AVCaptureDevice(uniqueID: $0.uid) }) ?? AVCaptureDevice.default(for: .audio) else {
             if replying { stopOfferInput() } else { hush() }; js("msg", "No microphone is available. Connect one and try again."); hide(after: 6); return
@@ -3325,11 +3349,13 @@ final class App: NSObject, WKScriptMessageHandler {
             guard let self, listenID == listeningID else { return }
             if case .failure(let error) = result { telemetry(["error", "native", "mic_start"]); if replying { stopOfferInput() } else { hush() }; js("msg", "Mic error: \(error.localizedDescription)"); hide(after: 3); return }
             began = Date()   // measure the limit from when the mic is ready
+            if quietFollowUp { js("quietListen", true) }   // only now: words said before the mic opened would be lost
             Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] t in
                 guard let self, listenID == listeningID, engine.isRunning else { return t.invalidate() }
                 let f = (dictating ? dictateHotkey() : hotkey()).flags, held = Date().timeIntervalSince(began)
-                if clickTalk && text.isEmpty && held > 8 { t.invalidate(); if quietFollowUp { hush(); fadeIdleHandsFree(); return }; if offerText != nil { stopOfferInput(); return }; hush(); js("stopped", ""); return hide(after: 3) }   // nothing said: stop the mic quietly
-                if parakeet && clickTalk && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && Date().timeIntervalSince(parakeetVoice) >= 1.3 { t.invalidate(); return stop() }   // heard() is too late for the 1.3 s pause
+                // nothing said: stop the mic quietly; a hands-free chat keeps listening until "close", ✕, Esc or 2 min of quiet
+                if clickTalk && text.isEmpty && held > (quietFollowUp ? 120 : 8) { t.invalidate(); if quietFollowUp { hush(); fadeIdleHandsFree(); return }; if offerText != nil { stopOfferInput(); return }; hush(); js("stopped", ""); return hide(after: 3) }
+                if parakeet && clickTalk && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && parakeetDone(Self.endPause) { t.invalidate(); return stop() }   // heard() is too late for the end pause
                 if parakeet { parakeetTick(listeningID) }
                 else if dictating && held >= nextSpeechRollover { nextSpeechRollover += 50; rolloverSpeech(listeningID: listeningID) }
                 if !dictating && held > 60 { t.invalidate(); recordingLimit(); return }
@@ -3346,25 +3372,26 @@ final class App: NSObject, WKScriptMessageHandler {
             quietAudio.begin(Prefs.bool("quietAudio"), level: Float32(Prefs.num("quietLevel")))
             js("listen"); if let s = selection { js("selected", s.text) }; show()
         }
+        if now != text { wordsChanged = Date() }
         text = now
         if dictating { scheduleDictateAhead(); return }   // cleanup starts on a pause; the pill still shows only the wave
         if offerText != nil {
             js(drawingReply ? "words" : picking ? "pickHear" : "draft", now)
-            if clickTalk && !parakeetListen { quiet?.cancel(); let q = DispatchWorkItem { [weak self] in self?.stop() }; quiet = q; DispatchQueue.main.asyncAfter(deadline: .now() + 1.3, execute: q) }
+            if clickTalk && !parakeetListen { quiet?.cancel(); let q = DispatchWorkItem { [weak self] in self?.stop() }; quiet = q; DispatchQueue.main.asyncAfter(deadline: .now() + Self.endPause, execute: q) }
             return   // card replies never enter live commands or early AI thinking
         }
         js("words", text)
         let wait = pauseWait()   // nil: Parakeet still hears a voice
-        if consumed > 0 && transcriptKey(words().prefix(consumed).joined(separator: " ")) != consumedText { liveRevised = true }
+        if consumed > 0 { if let n = actedWords() { consumed = n } else { liveRevised = true } }
         if Prefs.bool("live") {   // instant commands (open, move, search, play) run mid-sentence; the AI still waits for confirmed words
             pause?.cancel()   // only after a pause: "search amazon" mid-word is the start of "search amazon for e-bikes"
             let item = DispatchWorkItem { [weak self] in self?.tryFast() }
             pause = item
             if let wait { DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: item) }
         }
-        if clickTalk && !parakeetListen {   // no keys to let go of: a 1.3 s pause ends it (Parakeet: the listen timer, on the audio)
+        if clickTalk && !parakeetListen {   // no keys to let go of: the end pause ends it (Parakeet: the listen timer, on the audio)
             quiet?.cancel(); let q = DispatchWorkItem { [weak self] in self?.stop() }; quiet = q
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.3, execute: q)
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.endPause, execute: q)
         }
         if !ahead.isEmpty && transcriptKey(rest()) != transcriptKey(ahead) { dropAhead() }   // the user kept talking: that start was for half a sentence
         aheadItem?.cancel()   // a longer pause = the user is probably done: start the AI now, keys still held
@@ -3403,7 +3430,7 @@ final class App: NSObject, WKScriptMessageHandler {
         }
         let r = rest()
         guard engine.isRunning, !selectionPending, !fastBusy, !liveRevised, !r.isEmpty, transcriptKey(r) != transcriptKey(ahead) else { return }
-        let core = r.lowercased().replacingOccurrences(of: #"^(?:(?:hey|ok|okay|atticus|please|can you|could you|would you|also|and|now|then)[,\s]+)+"#, with: "", options: .regularExpression)
+        let core = r.lowercased().replacingOccurrences(of: #"^(?:(?:hey|ok|okay|aurel|please|can you|could you|would you|also|and|now|then)[,\s]+)+"#, with: "", options: .regularExpression)
         if ["open", "launch", "start", "pull up", "bring up", "focus", "switch to", "go to", "snap", "move", "put", "throw", "send", "make", "play", "search", "google", "look up"].contains(where: { core.hasPrefix($0 + " ") }) || hints.contains(where: { transcriptKey($0) == transcriptKey(r) }) { return }
         dropAhead()
         ahead = r
@@ -3411,14 +3438,14 @@ final class App: NSObject, WKScriptMessageHandler {
         warm = spawn()   // ready again in case the user keeps talking
     }
 
-    // Runs `atticus.py --fast` on the words not yet used; exit 0 means it was a simple command and it is done.
+    // Runs `aurel.py --fast` on the words not yet used; exit 0 means it was a simple command and it is done.
     func cancelFast() { fastProc?.terminate(); fastProc = nil; fastBusy = false }
 
     func tryFast() {
         let w = words()
         guard Prefs.bool("live"), Prefs.bool("instant"), engine.isRunning, !drawing.hasInput, !fastBusy, !liveRevised, w.count > consumed else { return }
         let seg = w[consumed...].joined(separator: " "), n = w.count, prefix = transcriptKey(w.joined(separator: " "))
-        let p = py(["--fast", seg], ["ATTICUS_FRONT": mine, "ATTICUS_SCREEN": targetScreen, "ATTICUS_LIVE": "1", "ATTICUS_FOCUS_GUARD": "1"]), out = Pipe()
+        let p = py(["--fast", seg], ["AUREL_FRONT": mine, "AUREL_SCREEN": targetScreen, "AUREL_LIVE": "1", "AUREL_FOCUS_GUARD": "1"]), out = Pipe()
         p.standardOutput = out
         do { try p.run() } catch { return }
         fastProc = p
@@ -3432,13 +3459,26 @@ final class App: NSObject, WKScriptMessageHandler {
                 fastProc = nil; fastBusy = false
                 if p.terminationStatus == 0 && line.hasPrefix("✓") {
                     consumed = n; consumedText = prefix
-                    if transcriptKey(words().prefix(n).joined(separator: " ")) != prefix { liveRevised = true }
+                    if let now = actedWords() { consumed = now } else { liveRevised = true }
                     did.append(String(line.dropFirst(2)))
                     js("line", "▸ " + line.dropFirst(2))
+                    if toggleTalk || clickTalk { endWhenQuiet(listenID) }
                 }
             }
         }
     }
+    // Toggle and hands-free listens have no key to let go of: once an instant command used every word, a second of quiet ends the ask.
+    func endWhenQuiet(_ id: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, listenID == id, engine.isRunning, words().count <= consumed else { return }   // more words: the rest is for the AI
+            if parakeetListen && !parakeetDone(1) { return endWhenQuiet(id) }   // Parakeet's words trail the voice
+            stop()
+        }
+    }
+    // With no key to let go of, this much quiet ends what was said: long enough for a pause to think mid-sentence.
+    static let endPause = 2.5
+    // A noisy room never reads as silent on the level alone: words that stopped changing for a second past the pause mean the user is done too.
+    func parakeetDone(_ pause: Double) -> Bool { Date().timeIntervalSince(parakeetVoice) >= pause || Date().timeIntervalSince(wordsChanged) >= max(2, pause + 1) }
 
     func dropAhead() {
         if !ahead.isEmpty { proc?.terminate(); proc = nil; ahead = ""; if engine.isRunning { busy = false } }
@@ -3517,7 +3557,7 @@ final class App: NSObject, WKScriptMessageHandler {
     @discardableResult func saveDictation(_ value: String, appName: String) -> Bool {
         let saved = DictationData.record(value, raw: text.trimmingCharacters(in: .whitespacesAndNewlines), app: appName, seconds: dictateSeconds > 0 ? dictateSeconds : Date().timeIntervalSince(began))
         if !saved { js("dictated", ["text": "Your words are ready. Couldn’t save history or stats.", "ok": false]) }
-        Atticus.settings.send("dictation", DictationData.state())
+        Aurel.settings.send("dictation", DictationData.state())
         return saved
     }
     // Settings → Dictation → Type as I talk (Verbatim only): at each pause the words no recognizer will revise go in, so text
@@ -3597,7 +3637,7 @@ final class App: NSObject, WKScriptMessageHandler {
         guard DictationData.word(word) else { return false }
         DictationData.fix(fix.heard, word)
         learnedWord = word; pill(true); show(); js("learned", word); hide(after: 6)
-        Atticus.settings.send("dictation", DictationData.state())
+        Aurel.settings.send("dictation", DictationData.state())
         return true
     }
     // No readable field: the next keys in that app, held in memory only, for 20 s; a click, secure input or another app ends it.
@@ -3619,7 +3659,7 @@ final class App: NSObject, WKScriptMessageHandler {
         editKeys = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] e in
             guard let self else { return }
             let f = e.modifierFlags
-            let why = dictateID != id ? "next dictation" : engine.isRunning || busy ? "Atticus busy" : !Prefs.bool("dictateLearn") || Prefs.bool("paused") ? "off" :
+            let why = dictateID != id ? "next dictation" : engine.isRunning || busy ? "Aurel busy" : !Prefs.bool("dictateLearn") || Prefs.bool("paused") ? "off" :
                 NSWorkspace.shared.frontmostApplication != app ? "app changed" : IsSecureEventInputEnabled() ? "secure input" : e.type != .keyDown ? "click" : nil
             guard why == nil, replay.key(Int(e.keyCode), e.characters ?? "", option: f.contains(.option), control: f.contains(.control), command: f.contains(.command)) else {
                 return end(why ?? "key \(e.keyCode)")   // Return after a fix still learns it
@@ -3865,14 +3905,17 @@ final class App: NSObject, WKScriptMessageHandler {
             }
             js("respond", response); return
         }
+        if handsFree && Self.endsChat(text) { cue("soundStop"); return close(clear: false) }
         if fastBusy || selectionPending {
             let g = stops
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [self] in if g == stops { finish() } }; return
         }
         aheadItem?.cancel()
         if liveRevised {
-            hush(); js("msg", "Your words changed after Atticus acted. Check them, then press Return.")
-            pinned = true; panel.makeKey(); panel.makeFirstResponder(web); js("draft", text); return
+            hush(); js("msg", "Your words changed after Aurel acted. Check them, then press Return.")
+            pinned = true; panel.makeKey(); panel.makeFirstResponder(boxView); js("draft", text)
+            if handsFree { followUp = true; followUpSoon() }   // still a conversation: say it again instead
+            return
         }
         let rest = rest()
         if did.isEmpty, !rest.isEmpty && transcriptKey(rest) == transcriptKey(ahead), proc?.isRunning == true {   // already started on exactly this while the user talked
@@ -3891,11 +3934,11 @@ final class App: NSObject, WKScriptMessageHandler {
         js("line", answer); deliver(did.joined(separator: " ")); lastDone = Date(); cue("soundDone"); followUpSoon(); hide(after: linger(5))
     }
 
-    // atticus.py --wait, started at key-down so Claude is up by the time the user lets go; run() hands it the words.
+    // aurel.py --wait, started at key-down so Claude is up by the time the user lets go; run() hands it the words.
     func spawn() -> (p: Process, input: FileHandle, commit: String)? {
-        let commit = NSTemporaryDirectory() + "atticus-commit-" + UUID().uuidString
+        let commit = NSTemporaryDirectory() + "aurel-commit-" + UUID().uuidString
         warmSel = selKey
-        let p = py(["--wait"], ["ATTICUS_UI": "1", "ATTICUS_FRONT": mine, "ATTICUS_SCREEN": targetScreen, "ATTICUS_COMMIT": commit, "ATTICUS_SELECTION": warmSel == "\u{1}" ? "" : warmSel, "ATTICUS_CARET": warmSel == "\u{1}" ? "1" : "", "ATTICUS_FOCUS_GUARD": "1"])
+        let p = py(["--wait"], ["AUREL_UI": "1", "AUREL_FRONT": mine, "AUREL_SCREEN": targetScreen, "AUREL_COMMIT": commit, "AUREL_SELECTION": warmSel == "\u{1}" ? "" : warmSel, "AUREL_CARET": warmSel == "\u{1}" ? "1" : "", "AUREL_FOCUS_GUARD": "1"])
         let pipe = Pipe(), inp = Pipe(); p.standardOutput = pipe; p.standardInput = inp
         fcntl(inp.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)   // a worker can exit before we write; let the catch handle EPIPE
         var buffer = Data(), guided = false   // guided: this ask put a guide on screen, whose callouts carry the explanation
@@ -3906,7 +3949,7 @@ final class App: NSObject, WKScriptMessageHandler {
                 while let i = buffer.firstIndex(of: 10) {
                     let line = String(decoding: buffer[..<i], as: UTF8.self); buffer.removeSubrange(...i)
                     if line == "! setup" { onboarding.open(automatic: true); continue }   // Claude not installed, signed out or no plan
-                    if line == "! improve" { self.js("improve"); continue }   // the one-time "help make Atticus better?" card
+                    if line == "! improve" { self.js("improve"); continue }   // the one-time "help make Aurel better?" card
                     if line.hasPrefix("▣ "), let value = try? JSONSerialization.jsonObject(with:Data(line.dropFirst(2).utf8)) as? [String:Any] { if Prefs.d["miniScreen"] as? Bool ?? true { self.mini.receive(value) }; continue }
                     if line.hasPrefix("✎ ") {
                         if Prefs.bool("draw"), self.drawing.receive(Data(line.dropFirst(2).utf8)) {
@@ -3932,10 +3975,10 @@ final class App: NSObject, WKScriptMessageHandler {
                         self.askNeed = p.count == 6 && !self.retryOffer ? (try? JSONSerialization.jsonObject(with:Data(p[5].utf8))) as? [String:Any] ?? [:] : [:]
                         self.askFile = p[2]; self.show(); self.js("ask", [p[0], p[1], self.retryOffer ? "retry" : "", self.retryOffer && p.count == 6 ? p[5] : ""]); continue
                     }
-                    if line.hasPrefix("⚙ ") {   // "⚙ <key> <true|false>": the AI flips one of Atticus's switches; never pause, and Safe mode only on
+                    if line.hasPrefix("⚙ ") {   // "⚙ <key> <true|false>": the AI flips one of Aurel's switches; never pause, and Safe mode only on
                         let p = line.split(separator: " ").map(String.init)
-                        if p.count == 3, Prefs.defaults[p[1]] is Bool, p[1] != "paused", p[1] != "safe" || p[2] == "true" { Atticus.settings.apply(p[1], p[2] == "true"); Atticus.settings.push() }
-                        else if p.count == 3, Prefs.d[p[1]] is String, !p[1].hasPrefix("hotkey") { Atticus.settings.apply(p[1], p[2]); Atticus.settings.push() }   // a choice setting ("workIn front")
+                        if p.count == 3, Prefs.defaults[p[1]] is Bool, p[1] != "paused", p[1] != "safe" || p[2] == "true" { Aurel.settings.apply(p[1], p[2] == "true"); Aurel.settings.push() }
+                        else if p.count == 3, Prefs.d[p[1]] is String, !p[1].hasPrefix("hotkey") { Aurel.settings.apply(p[1], p[2]); Aurel.settings.push() }   // a choice setting ("workIn front")
                         continue
                     }
                     if line.hasPrefix("◇ "), let j = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(2).utf8)) as? [String: Any] {   // "which one?": the choices card
@@ -3947,9 +3990,8 @@ final class App: NSObject, WKScriptMessageHandler {
                     }
                     if line.hasPrefix("⤴ "), let brief = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(2).utf8)) as? [String: Any] {
                         self.agentMoveFile = ""; self.busy = false; self.js("finished")
-                        self.web.evaluateJavaScript("ui.moveSource()") { value, _ in
-                            agentsUI.prepare(brief, from:(value as? [NSNumber])?.map(\.doubleValue))
-                        }
+                        let r = self.boxModel.rects["orb"]   // where the swim starts
+                        agentsUI.prepare(brief, from: r.map { [$0.minX, $0.minY, $0.width, $0.height] })
                         continue
                     }
                     if line.hasPrefix("↺ ") {
@@ -4034,7 +4076,7 @@ final class App: NSObject, WKScriptMessageHandler {
 
 // MARK: - Agent panels
 final class ShelfPanel: NSPanel { override var canBecomeKey: Bool { false } }
-// WebKit tracks hover only while the app is active, and Atticus never activates for the shelf, so hover reached the page only
+// WebKit tracks hover only while the app is active, and Aurel never activates for the shelf, so hover reached the page only
 // now and then. This view tracks the mouse itself (active always; the owner must be a view) and hands the page page-space points.
 final class PointerView: NSView {
     var onPointer: (([Double]) -> Void)?
@@ -4056,14 +4098,18 @@ final class PointerView: NSView {
 
 final class AgentPanels: NSObject {
     var process: Process?, input: FileHandle?, output: Pipe?, buffer = Data(), restarts = 0
-    var shelf: ShelfPanel?, view: KeyPanel?, viewHost: NSView?
+    var shelf: ShelfPanel?, view: NSWindow?, viewHost: NSView?
     let shelfModel = ShelfModel()   // the shelf, native
     let model = AgentViewModel()   // the Agent view, native
     let mini = MiniScreen()
-    var rows: [String:[String:Any]] = [:], offers: [String:[String:Any]] = [:], named: [[String:Any]] = []
+    var rows: [String:[String:Any]] = [:] {   // with no agents the tick sleeps; the first row wakes it
+        didSet { if !rows.isEmpty, timer == nil { timer = Timer.scheduledTimer(withTimeInterval:0.1, repeats:true) { [weak self] _ in self?.tick() } } }
+    }
+    var offers: [String:[String:Any]] = [:], named: [[String:Any]] = []
     var moveFrom: [String:[Double]] = [:], flying: [(String,[Double]?)] = []   // hand-offs (by handoffId) still waiting for their offer; accepted ones waiting for the rest of their ask
     var ping: String?, nearSince: Date?   // ping: a done card the user asked for in the box
     var lastBox: NSDictionary?
+    var kept = Date.distantPast   // a local agent keeps the local model loaded past its idle unload
     var hovered = "", miniSurface = "", selected = "", drag: (mouse:NSPoint, frame:NSRect)?
     var dismissed = Set(Prefs.d["agentDismissed"] as? [String] ?? []) {   // chips the user ×'d off the screen; their agents keep working in the badge and Agent view
         didSet { if dismissed != oldValue { Prefs.set("agentDismissed", dismissed.filter { rows[$0].map { Self.live.contains($0["status"] as? String ?? "") || Self.lingers($0) } ?? false }.sorted()) } }   // kept over a restart while it could still show
@@ -4102,7 +4148,7 @@ final class AgentPanels: NSObject {
             if let view, let screen = view.screen ?? NSScreen.main { view.setFrame(PanelFrame.clamp(view.frame,screen.visibleFrame),display:true) }
         }
         monitor = NSEvent.addLocalMonitorForEvents(matching:[.leftMouseDown,.leftMouseDragged,.leftMouseUp]) { [weak self] e in
-            if e.type == .leftMouseDown, e.window !== self?.shelf { self?.js("shelf","blur") }   // a click in another Atticus window
+            if e.type == .leftMouseDown, e.window !== self?.shelf { self?.js("shelf","blur") }   // a click in another Aurel window
             guard let self, let shelf, e.window === shelf else { return e }
             if e.type == .leftMouseDown { drag = (NSEvent.mouseLocation,shelf.frame) }   // a press anywhere on the shelf can move it; past 3 pt it is a drag and its click does nothing
             if e.type == .leftMouseDragged, let origin = drag {
@@ -4174,11 +4220,11 @@ final class AgentPanels: NSObject {
     var hasLive: Bool { rows.values.contains { Self.live.contains($0["status"] as? String ?? "") } }
     // Pause: queued rows stop first, so stopping a running one cannot start them.
     func stopAll() { rows.filter { Self.live.contains($0.value["status"] as? String ?? "") }.sorted { ($0.value["status"] as? String == "queued") && ($1.value["status"] as? String != "queued") }.forEach { send(["action":"stop","id":$0.key]) } }
-    // Allow on an agent's setup card: Atticus does what it can, opens the exact place for the rest, and tells the agent once it is on.
+    // Allow on an agent's setup card: Aurel does what it can, opens the exact place for the rest, and tells the agent once it is on.
     func allow(_ id:String, _ q:[String:Any]) {
         let need = q["need"] as? String ?? "", app = q["app"] as? String ?? "", ask = q["_a"] as? String ?? ""
-        if need == "page-js" { Prefs.set("pageJS",true); return }   // atticus.py turns it on itself
-        if need == "connector" { NSWorkspace.shared.open(URL(string:"https://claude.ai/settings/connectors")!); return }   // atticus.py watches for it
+        if need == "page-js" { Prefs.set("pageJS",true); return }   // aurel.py turns it on itself
+        if need == "connector" { NSWorkspace.shared.open(URL(string:"https://claude.ai/settings/connectors")!); return }   // aurel.py watches for it
         onboarding.allow(need, app:app)
         var tries = 0
         Timer.scheduledTimer(withTimeInterval:1, repeats:true) { [weak self] t in
@@ -4221,7 +4267,7 @@ final class AgentPanels: NSObject {
                 accept(id, from:moveFrom.removeValue(forKey:row["handoffId"] as? String ?? ""))
             } else if kind == "done" {
                 if quiet || row["routine"] != nil { notify(row); rows[id]?["notified"] = true; send(["action":"notified","id":id]) }
-            } else if kind == "ping", row["status"] as? String == "done" {   // atticus.py holds it while the box is busy, typing, listening or quiet
+            } else if kind == "ping", row["status"] as? String == "done" {   // aurel.py holds it while the box is busy, typing, listening or quiet
                 if quiet { if row["notified"] as? Bool != true { notify(row); rows[id]?["notified"] = true; send(["action":"notified","id":id]) } }
                 else { expand(id) }
             } else if kind == "steered" {   // the user spoke to this agent from the box: its chip comes back and says what it heard
@@ -4282,8 +4328,8 @@ final class AgentPanels: NSObject {
         let land = { [weak self] in self?.js("shelf","land",id) }
         guard !quiet, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let shelf, let rect, rect.count == 4, rect.allSatisfy(\.isFinite), rect[2] > 0, rect[3] > 0 else { land(); return }
         var r = NSRect(x:rect[0],y:rect[1],width:rect[2],height:rect[3])
-        if !app.web.isFlipped { r.origin.y = app.web.bounds.height - r.maxY }
-        let start = app.panel.convertToScreen(app.web.convert(r,to:nil)), from = NSPoint(x:start.midX,y:start.midY)
+        if !app.boxView.isFlipped { r.origin.y = app.boxView.bounds.height - r.maxY }
+        let start = app.panel.convertToScreen(app.boxView.convert(r,to:nil)), from = NSPoint(x:start.midX,y:start.midY)
         let at = slot?.count == 2 && slot!.allSatisfy(\.isFinite) ? slot! : [24,26]   // page point of its orb; else the top chip's
         let to = NSPoint(x:shelf.frame.minX + at[0],y:shelf.frame.maxY - at[1])
         let lift = max(50,hypot(to.x - from.x,to.y - from.y) * 0.2)
@@ -4324,7 +4370,7 @@ final class AgentPanels: NSObject {
         bg.onPointer = { [weak self] p in
             guard let self else { return }
             let hand = shelfModel.pointer(p)
-            if hand != pointerHand { pointerHand = hand; (hand ? NSCursor.pointingHand : NSCursor.arrow).set() }   // Atticus never activates, so nothing else sets the cursor here
+            if hand != pointerHand { pointerHand = hand; (hand ? NSCursor.pointingHand : NSCursor.arrow).set() }   // Aurel never activates, so nothing else sets the cursor here
         }
         host.frame = bg.bounds; host.autoresizingMask = [.width,.height]; bg.addSubview(host); bg.autoresizingMask = [.width,.height]
         panel.contentView = bg; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false   // chips cast their own shadows; a window shadow would box them
@@ -4360,10 +4406,11 @@ final class AgentPanels: NSObject {
         if view == nil {
             let screen = mouseScreen
             let f = PanelFrame.clamp(NSRect(x:screen.visibleFrame.midX-450,y:screen.visibleFrame.midY-310,width:900,height:620),screen.visibleFrame)
-            let panel = KeyPanel(contentRect:f,styleMask:[.titled,.closable,.resizable,.nonactivatingPanel,.fullSizeContentView],backing:.buffered,defer:false)
+            // A normal window, as Settings is: it activates Aurel, so it comes back from the Dock and ⌘Tab instead of hiding behind other apps (Dock).
+            let panel = NSWindow(contentRect:f,styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
             panel.title = "Agents"; panel.titleVisibility = .hidden; panel.titlebarAppearsTransparent = true
-            panel.minSize = NSSize(width:560,height:340); panel.isReleasedWhenClosed = false; panel.hidesOnDeactivate = false
-            applySharing(panel); panel.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary,.ignoresCycle]
+            panel.minSize = NSSize(width:560,height:340); panel.isReleasedWhenClosed = false
+            applySharing(panel)
             // A sidebar under the traffic lights, the conversation beside it. The live window preview (mini.clip) sits over the conversation's host.
             let split = NSSplitViewController()
             let side = NSSplitViewItem(sidebarWithViewController:NSHostingController(rootView:AgentSidebar(m:model)))
@@ -4379,7 +4426,7 @@ final class AgentPanels: NSObject {
             }
         }
         js("view","visible",true)
-        view?.orderFrontRegardless(); view?.makeKey()
+        if let view { Dock.show(view) }
         let id = id.isEmpty ? sorted.first(where:{ ["needs-you","running","waiting-screen","queued"].contains($0["status"] as? String ?? "") })?["id"] as? String ?? "" : id   // menu and pill land on the live agent
         if !id.isEmpty { selected = id; js("view","select",id); preview(id,surface:"view") }
         js("view","list",sorted)
@@ -4409,7 +4456,7 @@ final class AgentPanels: NSObject {
     }
     var hasChips: Bool { lingering || rows.values.contains { ["running","needs-you","waiting-screen","queued"].contains($0["status"] as? String ?? "") && !dismissed.contains($0["id"] as? String ?? "") } }
     func closeView() {
-        endPreview(); js("view","visible",false)
+        endPreview(); js("view","visible",false); Dock.update()   // Esc hides the window without closing it
         guard hasChips, !quiet else { return }
         shelf?.orderFrontRegardless(); js("shelf","resume")
     }
@@ -4446,9 +4493,12 @@ final class AgentPanels: NSObject {
         if inside { (shelf.contentView as? PointerView)?.here() }   // AppKit sends no mouseEntered to a window that stops ignoring the mouse under it
     }
     func tick() {
-        guard !rows.isEmpty else { shelf?.orderOut(nil); return }
+        guard !rows.isEmpty else { shelf?.orderOut(nil); timer?.invalidate(); timer = nil; return }
         let box: [String:Any] = ["action":"box","busy":app.busy,"typing":app.composing,"listening":app.engine.isRunning,"quiet":quiet]
         if lastBox?.isEqual(to:box) != true { lastBox = NSDictionary(dictionary:box); send(box) }
+        if Date().timeIntervalSince(kept) > 20, rows.values.contains(where: { $0["status"] as? String == "running" && $0["_requestedModel"] as? String == "local" }) {
+            kept = Date(); _ = LocalAI.shared.address()
+        }
         if let shelf {
             let hidden = quiet   // never hide in full screen: he works in full-screen apps on both displays
             if hidden || !hasChips {
@@ -4501,7 +4551,7 @@ final class AgentPanels: NSObject {
             var f = shelf.frame; f.origin.y = f.maxY - max(52,h); f.size.height = max(52,h)
             let next = PanelFrame.clamp(f,screen.visibleFrame); if next != shelf.frame { shelf.setFrame(next,display:false) }   // once per state change; the page already laid out
         case "dismiss":
-            if rows[id]?["status"] as? String == "done" { send(["action":"seen","id":id]); rows[id]?["seenAt"] = Date().timeIntervalSince1970 }   // as atticus.py saves it, so the saved list keeps it
+            if rows[id]?["status"] as? String == "done" { send(["action":"seen","id":id]); rows[id]?["seenAt"] = Date().timeIntervalSince1970 }   // as aurel.py saves it, so the saved list keeps it
             dismissed.insert(id)
             if hovered == id, miniSurface == "shelf" { endPreview() }
         case "stack": Prefs.set("agentStack",body["value"] as? String ?? "")
@@ -4509,6 +4559,9 @@ final class AgentPanels: NSObject {
         case "view", "show": openView(id); if rows[id]?["status"] as? String == "done" { send(["action":"seen","id":id]) }   // a finished chip clicked open
         case "lingering": lingering = body["value"] as? Bool ?? false; tick()
         case "close": if surface == "view" { view?.orderOut(nil); closeView() }
+        case "ask":   // New Chat's first message: an agent of its own, accepted, so it runs here like any other
+            guard let text = body["text"] as? String, !text.isEmpty else { return }
+            send(["action":"prepare","brief":["title":text.split(separator:" ").prefix(8).joined(separator:" "),"brief":String(text.prefix(1000)),"request":text,"context":"Asked in the Agents window.","accepted":true]])
         case "hover":
             if id.isEmpty { endPreview() }
             else if hovered != id || miniSurface != surface { preview(id,surface:surface) }
@@ -4538,6 +4591,8 @@ final class AgentViewModel: ObservableObject {
     @Published var folds: [String:Bool] = [:]
     @Published var opened = Set<String>()
     @Published var sideEditing = false   // a saved agent's name is being edited in the sidebar
+    @Published var composing = false   // New Chat: a blank conversation, until its first message's agent arrives
+    @Published var asked = ""   // that first message, sent and waiting for its agent
     var post: ([String:Any]) -> Void = { _ in }
     var miniFrame = CGRect.zero, scrollFrame = CGRect.zero, onMini: (CGRect, CGRect) -> Void = { _, _ in }
     var namedTimer: Timer?
@@ -4552,6 +4607,7 @@ final class AgentViewModel: ObservableObject {
             let row = AgentRow(r), old = rows.firstIndex { $0.id == row.id }
             if let old { if "\(rows[old].r["textVersion"] ?? "")" != "\(r["textVersion"] ?? "")" || row.status != "running" { liveText[row.id] = nil }; rows[old] = row }
             else { rows.insert(row, at:0) }
+            if composing, !asked.isEmpty, row.str("brief") == String(asked.prefix(1000)) { picked = row.id; composing = false; asked = "" }   // New Chat's agent: it takes over the blank page
         case "text":
             guard let e = value as? [String:Any], let id = e["id"] as? String, let text = e["text"] as? String else { return }
             liveText[id, default:""] += text
@@ -4566,6 +4622,7 @@ final class AgentViewModel: ObservableObject {
     }
     // The one shown: the picked one while it exists, else the live one, else the newest.
     var current: AgentRow? {
+        if composing { return nil }
         let all = rows + chats
         return all.first { $0.id == picked } ?? all.sorted { ($0.live ? 1 : 0, $0.num("created")) > ($1.live ? 1 : 0, $1.num("created")) }.first
     }
@@ -4576,7 +4633,7 @@ final class AgentViewModel: ObservableObject {
     }
 }
 
-// One row from atticus.py's agent supervisor, or a saved chat (it has turns).
+// One row from aurel.py's agent supervisor, or a saved chat (it has turns).
 struct AgentRow: Identifiable {
     let r: [String:Any]
     init(_ r: [String:Any]) { self.r = r }
@@ -4598,7 +4655,7 @@ struct AgentRow: Identifiable {
         switch status {
         case "running": return str("step").isEmpty ? "Starting…" : str("step")
         case "failed": return str("step").isEmpty ? "Couldn’t finish" : str("step")
-        case "done": return r["missingConnector"] != nil ? "Connect in Claude" : "Done · " + ago
+        case "done": return !(r["missingConnector"] as? String ?? "").isEmpty ? "Connect in Claude" : "Done · " + ago
         default: return word
         }
     }
@@ -4694,7 +4751,7 @@ struct AgentStep {
 
 func agentHost(_ url: String) -> String { (URL(string: url)?.host ?? "").replacingOccurrences(of: "^www\\.", with: "", options: .regularExpression) }
 
-// A streamed answer waits at a **bold, `code, [link or $math that has not closed yet, so its marks never flash as symbols (as orbs.js shut).
+// A streamed answer waits at a **bold, `code, [link or $math that has not closed yet, so its marks never flash as symbols (as shutAnswer in Answer.swift).
 func agentShut(_ s: String) -> String {
     let ns = s as NSString, all = NSRange(location: 0, length: ns.length)
     if ((try? NSRegularExpression(pattern: "^\\s*```", options: .anchorsMatchLines))?.numberOfMatches(in: s, range: all) ?? 0) % 2 == 1 { return s }   // inside a code block every mark is text
@@ -4714,7 +4771,7 @@ func agentShut(_ s: String) -> String {
 }
 
 // Textual finds math after Markdown has parsed, so Markdown would eat TeX escapes (\, \{) and read any $ as math.
-// Atticus's rules pick the math first (a $ before a digit is a price), shield it from Markdown, and hold every other $ aside as U+E000.
+// Aurel's rules pick the math first (a $ before a digit is a price), shield it from Markdown, and hold every other $ aside as U+E000.
 let answerSpan = try! NSRegularExpression(pattern: #"```[\s\S]*?(?:```|\z)|`[^`\n]+`|(?<!\\)\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|(?<!\\)\$(?=\S)((?:\\.|[^$\\\n])+?)(?<=\S)\$(?!\d)"#)
 func answerMarkdown(_ text: String) -> String {
     let s = text as NSString, dollar = "\u{E000}"; var out = "", at = 0
@@ -4802,7 +4859,7 @@ struct AgentSidebar: View {
         let ordered = m.rows.filter { match($0.title) }.sorted { $0.num("created") > $1.num("created") }
         let now = ordered.filter { $0.live || $0.status == "offered" }, past = ordered.filter { !($0.live || $0.status == "offered") }
         let saved = m.named.filter { match($0["name"] as? String ?? "") }, chats = m.chats.filter { match($0.title) }
-        List(selection: Binding(get: { m.current?.id }, set: { m.picked = $0 ?? "" })) {
+        List(selection: Binding(get: { m.current?.id }, set: { m.picked = $0 ?? ""; m.composing = false; m.asked = "" })) {
             if !now.isEmpty { section("now", "In Progress") { ForEach(now) { agentRow($0) } } }
             if !saved.isEmpty { section("saved", "Saved Agents") { ForEach(saved.indices, id: \.self) { savedRow(saved[$0]) } } }
             if !past.isEmpty {
@@ -4814,7 +4871,11 @@ struct AgentSidebar: View {
         .listStyle(.sidebar)
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 6) {
-                SearchField(text: $query).frame(height: 28)
+                HStack(spacing: 6) {
+                    SearchField(text: $query).frame(height: 28)
+                    Button { m.composing = true; m.asked = "" } label: { Image(systemName: "square.and.pencil").font(.system(size: 15)).frame(width: 28, height: 28) }
+                        .buttonStyle(.borderless).keyboardShortcut("n").help("New Chat (⌘N)")
+                }
                 if !m.namedStatus.isEmpty { Text(m.namedStatus).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
             }.padding(.horizontal, 10).padding(.bottom, 4)
         }
@@ -4851,6 +4912,10 @@ struct AgentSidebar: View {
         let last = (r.turns?.last?["a"] as? String ?? "").replacingOccurrences(of: #"[*_`#>$\\]|\[|\]\([^)]*\)"#, with: "", options: .regularExpression)
             .split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
         return line(AgentIcon(kind: "chat"), r.title, r.when) { last }.tag(r.id)
+            .contextMenu { Button("Delete…", role: .destructive) { deleting = r.id } }
+            .confirmationDialog("Delete “\(r.title)”?", isPresented: Binding(get: { deleting == r.id }, set: { if !$0 { deleting = "" } })) {
+                Button("Delete", role: .destructive) { m.command("chat-delete", r.id) }
+            } message: { Text("This chat will be deleted. You can’t undo this.") }
     }
     @ViewBuilder func savedRow(_ n: [String:Any]) -> some View {
         let name = n["name"] as? String ?? ""
@@ -4912,6 +4977,7 @@ struct AgentDetail: View {
     @State private var draft = ""
     @State private var title = ""
     @State private var editing = ""
+    @State private var hoverTitle = false
     @FocusState private var typing: Bool
     @FocusState private var naming: Bool
     var body: some View {
@@ -4919,7 +4985,8 @@ struct AgentDetail: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if let r { header(r); if !r.str("brief").isEmpty { Text(r.str("brief")).font(.system(size: 12.5)).foregroundStyle(.secondary).textSelection(.enabled) }; content(r) }
+                    if m.composing { blank }
+                    else if let r { header(r); if !r.str("brief").isEmpty { Text(r.str("brief")).font(.system(size: 12.5)).foregroundStyle(.secondary).textSelection(.enabled) }; content(r) }
                     else { empty }
                 }
                 .frame(maxWidth: 680, alignment: .leading).padding(.horizontal, 28).padding(.top, 8).padding(.bottom, 28).frame(maxWidth: .infinity)
@@ -4934,22 +5001,50 @@ struct AgentDetail: View {
         .environment(\.openURL, OpenURLAction { url in m.command("open", m.current?.id ?? "", ["target": url.absoluteString]); return .handled })
         .onExitCommand { m.post(["action":"close"]) }
         .onChange(of: r?.id ?? "", initial: true) { _, id in m.post(["action":"hover","id": m.current?.turns == nil ? id : ""]) }   // a window agent's live window follows the pick
+        .onChange(of: m.composing) { if $1 { draft = ""; typing = true } }
+    }
+    // New Chat: a title and the composer; the first message starts its agent, which then shows here.
+    var blank: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("New Chat").font(.system(size: 20, weight: .semibold))
+            if m.asked.isEmpty { Text("Ask anything. Aurel works on it right here.").font(.system(size: 11.5)).foregroundStyle(.secondary) }
+            else { HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Starting…") }.font(.system(size: 11.5)).foregroundStyle(.secondary) }
+        }.padding(.top, 14)
     }
     var empty: some View {
-        VStack(spacing: 6) { Text("No agents yet").font(.headline).foregroundStyle(.secondary); Text("Ask Atticus for something that takes a while.").foregroundStyle(.tertiary) }
+        VStack(spacing: 6) { Text("No agents yet").font(.headline).foregroundStyle(.secondary); Text("Ask Aurel for something that takes a while.").foregroundStyle(.tertiary) }
             .frame(maxWidth: .infinity).padding(.top, 80)
     }
     func header(_ r: AgentRow) -> some View {
         HStack(alignment: .center, spacing: 13) {
             if r.live && r.turns == nil { AgentOrb(id: r.id).frame(width: 38, height: 38) }   // the orb shows work under way; the status dot covers the rest
             VStack(alignment: .leading, spacing: 4) {
+                // Read: the title is a button that shows a pencil and a tint on hover. Edit: a real text box with a focus ring,
+                // Cancel and Save. Both are inset 8 pt so the words sit exactly where the title was.
                 if editing == r.id {
-                    TextField("Name", text: $title).textFieldStyle(.plain).font(.system(size: 20, weight: .semibold)).focused($naming)
-                        .onSubmit { rename(r) }.onExitCommand { editing = "" }.onChange(of: naming) { if !$1 { rename(r) } }
-                        .onAppear { title = r.title; naming = true }
+                    HStack(spacing: 8) {
+                        TextField("Name", text: $title).textFieldStyle(.plain).font(.system(size: 20, weight: .semibold)).focused($naming)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Color.accentColor, lineWidth: 2))
+                            .onSubmit { rename(r) }.onExitCommand { editing = "" }.onChange(of: naming) { if !$1 { rename(r) } }   // a click elsewhere saves, as in Finder
+                            .onAppear { title = r.title; naming = true }
+                        Button("Cancel") { editing = "" }
+                        Button("Save") { rename(r) }.buttonStyle(.borderedProminent).disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }.padding(.leading, -8)
                 } else {
-                    Text(r.title).font(.system(size: 20, weight: .semibold)).lineLimit(2).textSelection(.enabled)
-                        .onTapGesture(count: 2) { editing = r.id }.help("Double-click to rename")
+                    Button { editing = r.id } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            Text(r.title).font(.system(size: 20, weight: .semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                            Image(systemName: "pencil").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary).opacity(hoverTitle ? 1 : 0)
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(.primary.opacity(hoverTitle ? 0.07 : 0), in: RoundedRectangle(cornerRadius: 7))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).padding(.leading, -8).help("Rename")
+                    .onHover { hoverTitle = $0; ($0 ? NSCursor.pointingHand : NSCursor.arrow).set() }
+                    .animation(.easeOut(duration: 0.12), value: hoverTitle)
                 }
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                     HStack(spacing: 6) {
@@ -4959,7 +5054,6 @@ struct AgentDetail: View {
             }
             Spacer(minLength: 8)
             HStack(spacing: 6) {
-                if editing != r.id { Button { editing = r.id } label: { Image(systemName: "pencil") }.help("Rename") }
                 if r.status == "offered" { Button("Start") { m.command("start", r.id) }.buttonStyle(.borderedProminent) }
                 if r.live { Button { m.command("stop", r.id) } label: { Label("Stop", systemImage: "stop.fill") } }
                 if !r.str("directory").isEmpty { Button { m.command("reveal", r.id) } label: { Image(systemName: "folder") }.help("Show in Finder") }
@@ -4981,7 +5075,7 @@ struct AgentDetail: View {
             if let q = r.question { approval(r, q) }
             if r.live && r.question == nil { now(r) }
             if r.status == "failed" { problem(r.state, "Retry") { m.command("start", r.id) } }
-            if let need = r.r["missingConnector"] as? String { problem("Needs \(need). Connect it in Claude, then retry.", "Connect in Claude") { m.command("connect", r.id) } }
+            if let need = r.r["missingConnector"] as? String, !need.isEmpty { problem("Needs \(need). Connect it in Claude, then retry.", "Connect in Claude") { m.command("connect", r.id) } }
             let things = r.things
             if !things.isEmpty { section("MADE") { VStack(spacing: 6) { ForEach(things.indices, id: \.self) { thing(r, things[$0], main: $0 == 0) } } } }
             let body = r.status == "done" ? r.answer : "", said = m.liveText[r.id] ?? ""
@@ -5073,10 +5167,14 @@ struct AgentDetail: View {
         }
     }
     func followUp(_ r: AgentRow?) -> some View {
-        let off = r == nil || r?.turns != nil
-        let send = { guard let id = r?.id, !off else { return }; let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; m.command("followup", id, ["text": text]); draft = "" }
+        let off = m.composing ? !m.asked.isEmpty : r == nil || r?.turns != nil
+        let send = {
+            let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !off, !text.isEmpty else { return }
+            if m.composing { m.asked = text; m.post(["action":"ask","text":text]) } else if let id = r?.id { m.command("followup", id, ["text": text]) }
+            draft = ""
+        }
         return HStack(spacing: 6) {
-            TextField(r?.live == true ? "Tell it something…" : "Ask a follow-up…", text: $draft, axis: .vertical).textFieldStyle(.plain).lineLimit(1...5).focused($typing)
+            TextField(m.composing ? "Ask anything…" : r?.live == true ? "Tell it something…" : "Ask a follow-up…", text: $draft, axis: .vertical).textFieldStyle(.plain).lineLimit(1...5).focused($typing)
                 .onSubmit(send).disabled(off)
             Button(action: send) { Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)).frame(width: 26, height: 26).background(Color.accentColor.opacity(draft.isEmpty ? 0.4 : 1), in: Circle()).foregroundStyle(.white) }
                 .buttonStyle(.plain).disabled(off || draft.trimmingCharacters(in: .whitespaces).isEmpty).help("Send")
@@ -5106,7 +5204,7 @@ struct ApprovalCard: View {
                 Label { Text(q["pick"] as? String ?? q["q"] as? String ?? "Waiting for you").font(.system(size: 12.5, weight: .semibold)) } icon: { Image(systemName: need != nil ? "lock.shield" : "exclamationmark.triangle").foregroundStyle(.orange) }
                 if need != nil {
                     if !cmd.isEmpty { Text(cmd).font(.system(size: 12)) }
-                    Text(waiting ? (connector ? "Waiting for you to connect it…" : "Waiting for you to turn it on…") : mine ? "Atticus can change this setting itself." : connector ? "Connect it on claude.ai. The agent carries on by itself." : "macOS only lets you flip this one. Atticus shows you the switch.")
+                    Text(waiting ? (connector ? "Waiting for you to connect it…" : "Waiting for you to turn it on…") : mine ? "Aurel can change this setting itself." : connector ? "Connect it on claude.ai. The agent carries on by itself." : "macOS only lets you flip this one. Aurel shows you the switch.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 } else if !cmd.isEmpty {
                     ScrollView { Text(cmd).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 96).fixedSize(horizontal: false, vertical: true)
@@ -5485,7 +5583,7 @@ struct ShelfChip: View {
             HStack(spacing: 6) {
                 if live { Button { s.command("stop", r.id) } label: { Label("Stop", systemImage: "stop.fill") } }
                 if r.status == "failed" { Button("Retry") { s.command("start", r.id) }.buttonStyle(.borderedProminent) }
-                if r.r["missingConnector"] != nil { Button("Connect in Claude") { s.command("connect", r.id) }.buttonStyle(.borderedProminent) }
+                if !(r.r["missingConnector"] as? String ?? "").isEmpty { Button("Connect in Claude") { s.command("connect", r.id) }.buttonStyle(.borderedProminent) }
                 if live { Button("Open") { s.command("view", r.id) } } else { Button("Open") { s.command("view", r.id) }.buttonStyle(.borderedProminent) }
                 Spacer(minLength: 0)
                 TimelineView(.periodic(from: .now, by: 1)) { _ in Text(r.time).font(.system(size: 10.5)).foregroundStyle(.tertiary).monospacedDigit() }
@@ -5558,10 +5656,12 @@ final class RoutineWake {
     }
 }
 
-// First-run window (ui/onboarding.html): welcome, then each macOS permission with an Allow button, then how to use it.
-// Shows until finished once; to see it again: defaults delete com.atticus.app onboarded, then restart the app.
-final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
-    var win: NSWindow?, web: WKWebView?, timer: Timer?
+// First-run window (Onboarding.swift draws it): welcome, then each macOS permission with an Allow button, then how to use it.
+// Shows until finished once; to see it again: defaults delete com.aurel.app onboarded, then restart the app.
+final class Onboarding: NSObject, NSWindowDelegate {
+    var win: NSWindow?, model: OnboardingModel?, timer: Timer?   // the content is OnboardingModel and its view (Onboarding.swift)
+    var motion: NSObjectProtocol?
+    func ob(_ call: String, _ args: [Any]) { model?.receive(call, args) }   // Settings' recorder speaks to setup through this
     var checkingPlan = false, setupShown = false
     var screenInitiallyGranted = false, screenGrantedDuringSetup = false
     let pane = "x-apple.systempreferences:com.apple.preference.security?Privacy_"
@@ -5570,7 +5670,7 @@ final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
     func open(automatic: Bool = false) {
         if automatic && setupShown { return }
         setupShown = true   // closing setup is a choice; repeated failed asks must not reopen it
-        guard win == nil else { win?.makeKeyAndOrderFront(nil); return }
+        guard win == nil else { if let win { Dock.show(win) }; return }
         screenInitiallyGranted = CGPreflightScreenCaptureAccess(); screenGrantedDuringSetup = false
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 640),
                          styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
@@ -5579,20 +5679,20 @@ final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
         w.isReleasedWhenClosed = false; w.delegate = self
         let bg = NSVisualEffectView(frame: w.contentRect(forFrameRect: w.frame))
         bg.material = .underWindowBackground; bg.blendingMode = .behindWindow; bg.state = .active
-        let cfg = WKWebViewConfiguration()
-        cfg.userContentController.add(self, name: "ob")
-        if automatic {   // a sign-in or install problem opens at the Claude row, not the welcome
-            cfg.userContentController.addUserScript(WKUserScript(source: "window.obStart = 'perms'", injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        }
-        let v = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 612), configuration: cfg)   // top 28 pt stays draggable
-        v.setValue(false, forKey: "drawsBackground")
-        loadPage(v, "onboarding.html")
+        let m = OnboardingModel(); m.post = { [weak self] in self?.handle($0) }
+        let v = NSHostingView(rootView: OnboardingView(m: m))
+        v.frame = NSRect(x: 0, y: 0, width: 640, height: 612)   // top 28 pt stays draggable
         bg.addSubview(v); w.contentView = bg
-        win = w; web = v
-        w.center(); NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil)
+        win = w; model = m
+        motion = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak m] _ in
+            m?.receive("motion", NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)   // Reduce Motion while setup is open: the previews snap to their last frame
+        }
+        m.go(automatic ? "perms" : "welcome")   // a sign-in or install problem opens at the Claude row, not the welcome
+        w.center(); Dock.show(w)
         var tick = 0
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in   // keys 20×/s, permissions 1×/s
+        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self, weak w] _ in   // keys 20×/s, permissions 1×/s
             guard let self else { return }
+            guard w?.occlusionState.contains(.visible) == true else { tick = 0; return }   // minimized or covered: no polling; back in view, everything refreshes at once
             call("ob.keys", shortcutModifierLabel(NSEvent.modifierFlags))
             tick += 1
             if tick % 20 == 1 { push() }
@@ -5607,7 +5707,7 @@ final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
             DispatchQueue.main.async {
                 if self?.screenInitiallyGranted == false, s["screen"] == true { self?.screenGrantedDuringSetup = true }
                 self?.call("ob.set", s)
-                self?.web?.evaluateJavaScript("ob.mode(\(Prefs.str("talkMode") == "toggle"))")
+                self?.call("ob.mode", Prefs.str("talkMode") == "toggle")
                 self?.call("ob.prefs", ["draw": Prefs.bool("draw"), "routing": Prefs.str("routing"), "hotkeyLabel": Prefs.str("hotkeyLabel"), "safe": Prefs.bool("safe"),
                                         "dictateMode": Prefs.str("dictateMode"), "dictateHotkeyLabel": Prefs.str("dictateHotkeyLabel"), "globeTaken": globeKeyTaken()])
             }
@@ -5621,13 +5721,13 @@ final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
          "chrome": Prefs.bool("pageJS") || NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") == nil]   // no Chrome: nothing to turn on   // a live check fails while System Events is quit, so fall back to what was granted
     }
 
-    // Claude Code installed, signed in, on a paid plan? (atticus.py --check)
+    // Claude Code installed, signed in, on a paid plan? (aurel.py --check)
     static func plan(_ done: @escaping ([String: Any]) -> Void) {
         DispatchQueue.global().async {
             let p = py(["--check"]), out = Pipe(); p.standardOutput = out
             try? p.run(); p.waitUntilExit()
             let j = (try? JSONSerialization.jsonObject(with: out.fileHandleForReading.readDataToEndOfFile())) as? [String: Any]
-            DispatchQueue.main.async { done(j ?? ["ok": false, "need": "install", "text": "Could not run Atticus’s helper (python3 missing?)."]) }
+            DispatchQueue.main.async { done(j ?? ["ok": false, "need": "install", "text": "Could not run Aurel’s helper (python3 missing?)."]) }
         }
     }
 
@@ -5644,36 +5744,36 @@ final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
     func fixPlan() {
         Onboarding.plan { [weak self] c in
             let need = c["need"] as? String ?? ""
-            if need.isEmpty, c["ok"] as? Bool == false { Atticus.settings.open(); return }
-            if need == "download" { Atticus.settings.open(tab: "brain"); return }   // Local: its model downloads in Settings
+            if need.isEmpty, c["ok"] as? Bool == false { Aurel.settings.open(); return }
+            if need == "download" { Aurel.settings.open(tab: "brain"); return }   // Local: its model downloads in Settings
             if need == "upgrade" { NSWorkspace.shared.open(URL(string: "https://claude.ai/upgrade")!); return }
             let cmd = need == "install"
                 ? "curl -fsSL https://claude.ai/install.sh | bash && ~/.local/bin/claude auth login"
                 : "claude auth login"
-            let f = NSTemporaryDirectory() + "atticus-claude.command"
-            try? "#!/bin/zsh\nexport PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\necho 'Atticus: setting up Claude Code'\n\(cmd)\necho; echo 'Done. You can close this window.'\n".write(toFile: f, atomically: true, encoding: .utf8)
+            let f = NSTemporaryDirectory() + "aurel-claude.command"
+            try? "#!/bin/zsh\nexport PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\necho 'Aurel: setting up Claude Code'\n\(cmd)\necho; echo 'Done. You can close this window.'\n".write(toFile: f, atomically: true, encoding: .utf8)
             chmod(f, 0o755)
             NSWorkspace.shared.open(URL(fileURLWithPath: f))
             self?.checkPlan()
         }
     }
 
-    func tried() { web?.evaluateJavaScript("ob.tried()") }
+    func tried() { model?.receive("tried", []) }
 
-    // Open the exact privacy pane and point at the switch: Atticus's own row, or an app's row under Atticus (Automation).
+    // Open the exact privacy pane and point at the switch: Aurel's own row, or an app's row under Aurel (Automation).
     func settings(_ p: String, point label: String = Onboarding.name) {
         guard NSWorkspace.shared.open(URL(string: pane + p)!) else { return }
         help(p, point: label)
         Onboarding.pointSwitch(label, under: label == Onboarding.name ? nil : Onboarding.name)
     }
     func help(_ p: String, point label: String = Onboarding.name) {
-        permissionHelp.show(drag: p == "Accessibility" || p == "ScreenCapture", target: label == Onboarding.name ? "Atticus" : "\(label) under Atticus") {
+        permissionHelp.show(drag: p == "Accessibility" || p == "ScreenCapture", target: label == Onboarding.name ? "Aurel" : "\(label) under Aurel") {
             if p == "Automation", label != Onboarding.name { return Onboarding.granted("automation", app: label) }
             let key = ["Accessibility": "ax", "ScreenCapture": "screen", "Microphone": "mic", "SpeechRecognition": "speech", "Calendars": "calendar", "Automation": "auto"][p] ?? ""
             return Onboarding.perms()[key] == true
         }
     }
-    static let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Atticus"
+    static let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Aurel"
 
     // Show, don't tell: once the pane is up, ring the switch on the row named `label` (below `under`, when given).
     // Reading System Settings needs Accessibility; without it the pane still opens and the card says what to flip.
@@ -5705,19 +5805,19 @@ final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
             ?? NSWorkspace.shared.fullPath(forApplication: app).flatMap { Bundle(path: $0)?.bundleIdentifier }
     }
 
-    // An agent's "needs you" kinds (atticus.py NEEDS), checked live while its card waits.
+    // An agent's "needs you" kinds (aurel.py NEEDS), checked live while its card waits.
     static func granted(_ need: String, app: String) -> Bool {
         if need == "automation" { return bundle(app).map { Apps.check($0, ask: false) == noErr } ?? false }
         return perms()[["accessibility": "ax", "screen": "screen", "microphone": "mic", "calendar": "calendar"][need] ?? ""] ?? false
     }
 
-    // Enable All: Atticus's own settings at once, then each macOS switch in turn, opened and pointed at; what is on is skipped.
+    // Enable All: Aurel's own settings at once, then each macOS switch in turn, opened and pointed at; what is on is skipped.
     var walk: [String] = [], walkTimer: Timer?, walkSince = Date()
     func enableAll(connected: Bool) {
         grant("tools")
         let p = Onboarding.perms()
         walk = ["ax", "auto", "chrome", "screen", "calendar"].filter { p[$0] != true } + (connected ? [] : ["connectors"])   // page reading needs the first two
-        if walk.isEmpty { Atticus.settings.send("notice", ["text": "Everything is already on."]) }   // a click must always answer
+        if walk.isEmpty { Aurel.settings.send("notice", ["text": "Everything is already on."]) }   // a click must always answer
         step()
         walkTimer?.invalidate()
         walkTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
@@ -5732,18 +5832,22 @@ final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
     }
     func step() {
         let id = walk.first ?? ""; walkSince = Date()
-        call("ob.walk", id); Atticus.settings.send("walk", id)
+        call("ob.walk", id); Aurel.settings.send("walk", id)
         switch id {
         case "": break
-        case "auto":   // System Events, which page reading and app scripting go through
-            DispatchQueue.global().async { if Apps.check("com.apple.systemevents", ask: true) != noErr { DispatchQueue.main.async { self.settings("Automation", point: "System Events") } } }
+        case "auto":   // System Events, which page reading and app scripting go through. Apps.allow opens it first: macOS can't ask about an app that isn't running.
+            Apps.job += 1; let me = Apps.job
+            Apps.q.async {
+                Apps.current = me
+                Apps.allow(["com.apple.systemevents"]) { _, s in if s == "blocked" || s == "new" { DispatchQueue.main.async { self.settings("Automation", point: "System Events") } } }
+            }
         case "connectors": grant(id); walk.removeAll(); step()   // signing in happens on claude.ai; its row updates when Settings or setup opens again
         default: grant(id)
         }
     }
-    func call(_ f: String, _ v: Any) { callJS(web, f, [v]) }
+    func call(_ f: String, _ v: Any) { model?.receive(f.hasPrefix("ob.") ? String(f.dropFirst(3)) : f, v) }
 
-    // The user's claude.ai connectors (atticus.py --connectors): {connected: [names], signin: [names]}. Slow (it checks each one), so once per open.
+    // The user's claude.ai connectors (aurel.py --connectors): {connected: [names], signin: [names]}. Slow (it checks each one), so once per open.
     static func connectors(_ done: @escaping ([String: Any]) -> Void) {
         DispatchQueue.global().async {
             let p = py(["--connectors"]), out = Pipe(); p.standardOutput = out
@@ -5759,29 +5863,28 @@ final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
         case "screen": grant("screen")
         case "microphone": grant("mic")
         case "calendar": grant("calendar")
-        case "automation":   // macOS's own prompt if it never asked; its switch under Atticus once it said no
+        case "automation":   // macOS's own prompt if it never asked; its switch under Aurel once it said no
             guard let id = Onboarding.bundle(app) else { return settings("Automation", point: app) }
             DispatchQueue.global().async { if Apps.check(id, ask: true) != noErr { DispatchQueue.main.async { self.settings("Automation", point: app) } } }
         default: break
         }
     }
 
-    func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
-        guard let b = m.body as? [String: String] else { return }
+    func handle(_ b: [String: String]) {
         if b["do"] == "done" { return finish() }
         if b["do"] == "enableAll" { return enableAll(connected: b["connected"] == "true") }
         if b["do"] == "provider", let c = b["client"], ["local", "claude"].contains(c) {   // the plan row's Change provider sheet
-            Atticus.settings.apply("client", c)
-            Atticus.settings.push(); return checkPlan()
+            Aurel.settings.apply("client", c)
+            Aurel.settings.push(); return checkPlan()
         }
         if b["do"] == "connectors" { return Onboarding.connectors { [weak self] c in self?.call("ob.connectors", c) } }
         if b["do"] == "set", let k = b["k"], let v = b["v"] {   // the feature pages' switches and choices
             let choices = ["routing": ["cheapest", "balanced", "capable"], "dictateMode": ["verbatim", "cleanup"]]
-            if ["draw", "improve"].contains(k) { Atticus.settings.apply(k, v == "true") } else if choices[k]?.contains(v) == true { Atticus.settings.apply(k, v) } else { return }
-            Atticus.settings.push(); return push()
+            if ["draw", "improve"].contains(k) { Aurel.settings.apply(k, v == "true") } else if choices[k]?.contains(v) == true { Aurel.settings.apply(k, v) } else { return }
+            Aurel.settings.push(); return push()
         }
-        if b["do"] == "recordDictate" { return Atticus.settings.record("dictate") { [weak self] call in self?.web?.evaluateJavaScript("ob." + call) } }
-        if let d = b["do"], ["cancelRecord", "clearDictate", "globeKey"].contains(d) { Atticus.settings.handle(["do": d]); return push() }
+        if b["do"] == "recordDictate" { return Aurel.settings.record("dictate") { [weak self] call, args in self?.ob(call, args) } }
+        if let d = b["do"], ["cancelRecord", "clearDictate", "globeKey"].contains(d) { Aurel.settings.handle(["do": d]); return push() }
         grant(b["id"] ?? "")
     }
 
@@ -5801,7 +5904,7 @@ final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
         case "claude":
             fixPlan()
         case "connectors": NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/connectors")!)
-        case "tools": Atticus.settings.apply("agentUserTools", true); Atticus.settings.push()
+        case "tools": Aurel.settings.apply("agentUserTools", true); Aurel.settings.push()
         case "calendar":
             if EKEventStore.authorizationStatus(for: .event) == .notDetermined { calendar.requestFullAccessToEvents { _, _ in } }
             else { settings("Calendars") }
@@ -5811,8 +5914,8 @@ final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
             if UserDefaults.standard.bool(forKey: "askedScreen") { if !CGPreflightScreenCaptureAccess() { settings("ScreenCapture") } }
             else { UserDefaults.standard.set(true, forKey: "askedScreen"); if CGRequestScreenCaptureAccess() { screenGrantedDuringSetup = true } else { help("ScreenCapture") } }
         case "auto":
-            Atticus.settings.open(tab: "apps")
-        case "chrome":   // clicks Chrome's View > Developer > Allow JavaScript from Apple Events; Atticus keeps it on after this OK
+            Aurel.settings.open(tab: "apps")
+        case "chrome":   // clicks Chrome's View > Developer > Allow JavaScript from Apple Events; Aurel keeps it on after this OK
             DispatchQueue.global().async {
                 let p = py(["--allow-js"]); try? p.run(); p.waitUntilExit()
                 if p.terminationStatus == 0 { DispatchQueue.main.async { Prefs.set("pageJS", true) } }
@@ -5829,16 +5932,16 @@ final class Onboarding: NSObject, WKScriptMessageHandler, NSWindowDelegate {
         if relaunch { relaunchSoon() }
     }
 
-    func windowDidResignKey(_ n: Notification) { if Atticus.settings.echo != nil { Atticus.settings.done(nil) } }   // keys typed elsewhere must not become the shortcut
+    func windowDidResignKey(_ n: Notification) { if Aurel.settings.echo != nil { Aurel.settings.done(nil) } }   // keys typed elsewhere must not become the shortcut
 
     func windowWillClose(_ n: Notification) {
         permissionHelp.close()
-        if Atticus.settings.echo != nil { Atticus.settings.done(nil) }   // closed mid-recording: keep the old shortcut
+        if Aurel.settings.echo != nil { Aurel.settings.done(nil) }   // closed mid-recording: keep the old shortcut
         timer?.invalidate(); timer = nil
+        if let motion { NSWorkspace.shared.notificationCenter.removeObserver(motion); self.motion = nil }
         walkTimer?.invalidate(); walkTimer = nil   // closing setup cancels Enable All: no more Settings panes open later
-        if !walk.isEmpty { walk = []; Atticus.settings.send("walk", "") }
-        web?.configuration.userContentController.removeScriptMessageHandler(forName: "ob")
-        web = nil; win = nil
+        if !walk.isEmpty { walk = []; Aurel.settings.send("walk", "") }
+        model = nil; win = nil
     }
 }
 
@@ -5862,16 +5965,16 @@ final class PermissionHelp: NSObject, NSWindowDelegate {
         let w = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 110),
                         styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
         applySharing(w)
-        w.title = "Allow Atticus"; w.level = .floating; w.hidesOnDeactivate = false
+        w.title = "Allow Aurel"; w.level = .floating; w.hidesOnDeactivate = false
         w.isReleasedWhenClosed = false; w.delegate = self
         let bg = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 360, height: 110))
         bg.material = .popover; bg.state = .active
         let icon = drag ? PermissionIcon(frame: NSRect(x: 16, y: 30, width: 56, height: 56)) : NSImageView(frame: NSRect(x: 16, y: 30, width: 56, height: 56))
         icon.image = NSWorkspace.shared.icon(forFile: Bundle.main.bundleURL.path)
         icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.setAccessibilityLabel(drag ? "Drag Atticus into System Settings" : "Atticus")
+        icon.setAccessibilityLabel(drag ? "Drag Aurel into System Settings" : "Aurel")
         let text = NSTextField(wrappingLabelWithString: drag
-            ? "Drag Atticus into the list, then turn it on.\nYou can also use Add (+) to choose Atticus."
+            ? "Drag Aurel into the list, then turn it on.\nYou can also use Add (+) to choose Aurel."
             : "Turn on \(target) in the list.\nIf it’s missing, return to setup and click Allow to request access first.")
         text.frame = NSRect(x: 86, y: 14, width: 258, height: 82)
         text.font = .systemFont(ofSize: 13)
@@ -5910,7 +6013,7 @@ final class PermissionHelp: NSObject, NSWindowDelegate {
     func windowWillClose(_ n: Notification) { timer?.invalidate(); timer = nil; panel = nil }
 }
 
-// `Atticus --look <screen #> <out.jpg> [window id]` (atticus.py --look): the screen without Atticus's own box on it, 1280 px wide.
+// `Aurel --look <screen #> <out.jpg> [window id]` (aurel.py --look): the screen without Aurel's own box on it, 1280 px wide.
 // With a window id, that window's own capture is painted where it sits, so it shows (and its picture spots click) even when covered or not key.
 if [4, 5].contains(CommandLine.arguments.count), CommandLine.arguments[1] == "--look" {
     let a = CommandLine.arguments, done = DispatchSemaphore(value: 0), windowID = a.count == 5 ? UInt32(a[4]) : nil
@@ -5921,7 +6024,7 @@ if [4, 5].contains(CommandLine.arguments.count), CommandLine.arguments[1] == "--
         defer { done.signal() }
         guard let all = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: windowID == nil),
               let d = all.displays.first(where: { $0.displayID == id }) ?? all.displays.first else { return }
-        // Every Atticus window (box, step card, drawings): the model sees the real screen and so draws on it, not on the box
+        // Every Aurel window (box, step card, drawings): the model sees the real screen and so draws on it, not on the box
         let mine = all.windows.filter { $0.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier }
         let cfg = SCStreamConfiguration()
         cfg.width = 1280; cfg.height = Int(1280 * Double(d.height) / Double(d.width))
@@ -5942,7 +6045,7 @@ if [4, 5].contains(CommandLine.arguments.count), CommandLine.arguments[1] == "--
     exit(FileManager.default.fileExists(atPath: a[3]) ? 0 : 1)
 }
 
-// `Atticus --text <app> [title words]` (atticus.py --watch): the text in that app's window, read on this Mac, even when covered.
+// `Aurel --text <app> [title words]` (aurel.py --watch): the text in that app's window, read on this Mac, even when covered.
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--text" {
     let a = CommandLine.arguments, words = a.count > 3 ? a[3].lowercased() : "", done = DispatchSemaphore(value: 0)
     var found = false
@@ -6044,27 +6147,27 @@ var leader: NSPanel?
 }
 
 
-// Restart Atticus (Screen Recording only takes effect in a new process); works under launchd or when opened by hand.
+// Restart Aurel (Screen Recording only takes effect in a new process); works under launchd or when opened by hand.
 func relaunchSoon() {
     let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/sh")
-    p.arguments = ProcessInfo.processInfo.environment["ATTICUS_DIR"] != nil ? ["-c", "sleep 1; exec \"$0\" -onboarded YES", CommandLine.arguments[0]] :
-                  ["-c", "sleep 1; launchctl bootout gui/\(getuid())/com.atticus.app >/dev/null 2>&1; sleep 1; launchctl bootstrap gui/\(getuid()) \"$1\" 2>/dev/null || open \"$0\"",
-                   Bundle.main.bundlePath, NSHomeDirectory() + "/Library/LaunchAgents/com.atticus.app.plist"]
+    p.arguments = ProcessInfo.processInfo.environment["AUREL_DIR"] != nil ? ["-c", "sleep 1; exec \"$0\" -onboarded YES", CommandLine.arguments[0]] :
+                  ["-c", "sleep 1; launchctl bootout gui/\(getuid())/com.aurel.app >/dev/null 2>&1; sleep 1; launchctl bootstrap gui/\(getuid()) \"$1\" 2>/dev/null || open \"$0\"",
+                   Bundle.main.bundlePath, NSHomeDirectory() + "/Library/LaunchAgents/com.aurel.app.plist"]
     try? p.run()
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
 }
 
-// Updates: build.sh records the source folder (a git clone); Atticus pulls and rebuilds itself from it, then
+// Updates: build.sh records the source folder (a git clone); Aurel pulls and rebuilds itself from it, then
 // restarts once idle. Local edits or a failed build leave the running version alone.
 enum Updater {
-    static let src = Bundle.main.object(forInfoDictionaryKey: "AtticusSource") as? String ?? ""
+    static let src = Bundle.main.object(forInfoDictionaryKey: "AurelSource") as? String ?? ""
     static let managedByNix = src.hasPrefix("/nix/store/")
     static var status = "", checking = false
-    static func sh(_ script: String) -> (code: Int32, out: String) {
+    static func sh(_ script: String, _ args: [String] = []) -> (code: Int32, out: String) {
         let p = Process(), o = Pipe()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh"); p.arguments = ["-c", script, src]; p.standardOutput = o; p.standardError = o
+        p.executableURL = URL(fileURLWithPath: "/bin/zsh"); p.arguments = ["-c", script, src] + args; p.standardOutput = o; p.standardError = o
         var env = ProcessInfo.processInfo.environment
-        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; env["ATTICUS_NO_RESTART"] = "1"; p.environment = env
+        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"; env["AUREL_NO_RESTART"] = "1"; p.environment = env
         try? p.run(); p.waitUntilExit()
         return (p.terminationStatus, String(data: o.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "")
     }
@@ -6074,7 +6177,7 @@ enum Updater {
     }()
     static func check(_ done: @escaping () -> Void = {}) {
         if managedByNix { status = "Run nix profile upgrade or nix run again."; done(); return }
-        if src.isEmpty || ProcessInfo.processInfo.environment["ATTICUS_DIR"] != nil { status = "Preview build"; done(); return }
+        if src.isEmpty || ProcessInfo.processInfo.environment["AUREL_DIR"] != nil { status = "Preview build"; done(); return }
         guard !checking else { done(); return }
         checking = true
         status = "Checking…"; done()
@@ -6083,11 +6186,13 @@ enum Updater {
                 cd "$0" 2>/dev/null || exit 3
                 [ -z "$(git status --porcelain)" ] || exit 5
                 git fetch -q 2>/dev/null || exit 4
-                git merge-base --is-ancestor '@{u}' HEAD 2>/dev/null && exit 0   # level or ahead (unpushed local commits): nothing to pull, no rebuild loop
-                git pull -q --ff-only 2>/dev/null || exit 5
+                # level or ahead (unpushed local commits): nothing to pull. $1 is the commit this app was built from, so a pulled
+                # update whose build failed is built again, and a built one never loops.
+                if git merge-base --is-ancestor '@{u}' HEAD 2>/dev/null; then [ "$(git rev-parse HEAD)" = "$1" ] && exit 0
+                else git pull -q --ff-only 2>/dev/null || exit 5; fi
                 ./build.sh >/dev/null 2>&1 || exit 6
                 exit 10
-                """#)
+                """#, [Bundle.main.object(forInfoDictionaryKey: "AurelCommit") as? String ?? ""])
             DispatchQueue.main.async {
                 checking = false
                 status = [0: "Up to date", 3: "Source folder not found (reinstall with build.sh)", 4: "Couldn’t reach GitHub",
@@ -6110,16 +6215,59 @@ enum Updater {
     }
 }
 
-// Opening Atticus again (Spotlight, Finder, Dock) while it runs: setup the first time, Settings after (Agents is the first item there).
+// Opening Aurel again (Spotlight, Finder, Dock) while it runs: setup the first time, Settings after (Agents is the first item there).
 final class Delegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         app.hush(); app.drawing.clear(); app.quietAudio.end(immediate: true); app.shush()
         return .terminateNow
     }
     func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if let w = Dock.windows.first { Dock.show(w); return false }   // the Dock icon brings back the window it stands for
         UserDefaults.standard.bool(forKey: "onboarded") ? settings.open() : onboarding.open()
         return false
     }
+}
+
+// Aurel lives in the menu bar (LSUIElement). While Settings, Agents or setup is open it also gets a Dock icon, ⌘Tab and a menu bar,
+// so those windows come back like any app's instead of hiding behind other windows. The box, shelf and pill never count: they never take focus.
+enum Dock {
+    static var windows: [NSWindow] { [settings.win, agentsUI.view, onboarding.win].compactMap { $0 }.filter { $0.isVisible || $0.isMiniaturized } }
+    static func show(_ w: NSWindow) {
+        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular); NSApp.mainMenu = menu }
+        NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil)
+    }
+    // After a window closes or hides. The wait lets a closing window finish and keeps the icon from flickering when one window replaces another.
+    static func update() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            if windows.isEmpty, NSApp.activationPolicy() == .regular { NSApp.setActivationPolicy(.accessory) }
+        }
+    }
+    static let watch: Void = { NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { _ in update() } }()
+    // Settings…, the Agents window, Hide and Quit, and the Edit menu text fields need for ⌘C, ⌘V, ⌘Z and ⌘A.
+    static let menu: NSMenu = {
+        _ = watch
+        let main = NSMenu(), aurel = NSMenu(title: "Aurel"), edit = NSMenu(title: "Edit"), window = NSMenu(title: "Window")
+        func add(_ m: NSMenu, _ title: String, _ action: Selector?, _ key: String = "", _ mods: NSEvent.ModifierFlags = .command, target: AnyObject? = nil) {
+            let item = m.addItem(withTitle: title, action: action, keyEquivalent: key); item.keyEquivalentModifierMask = mods; item.target = target
+        }
+        add(aurel, "Settings…", #selector(DockActions.settings), ",", target: DockActions.shared)
+        add(aurel, "Agents", #selector(DockActions.agents), "0", target: DockActions.shared)
+        aurel.addItem(.separator())
+        add(aurel, "Hide Aurel", #selector(NSApplication.hide(_:)), "h")
+        add(aurel, "Quit Aurel", #selector(NSApplication.terminate(_:)), "q")
+        add(edit, "Undo", Selector(("undo:")), "z"); add(edit, "Redo", Selector(("redo:")), "z", [.command, .shift]); edit.addItem(.separator())
+        add(edit, "Cut", #selector(NSText.cut(_:)), "x"); add(edit, "Copy", #selector(NSText.copy(_:)), "c"); add(edit, "Paste", #selector(NSText.paste(_:)), "v")
+        add(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
+        add(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"); add(window, "Close", #selector(NSWindow.performClose(_:)), "w")
+        for (title, sub) in [("Aurel", aurel), ("Edit", edit), ("Window", window)] { main.addItem(withTitle: title, action: nil, keyEquivalent: "").submenu = sub }
+        NSApp.windowsMenu = window
+        return main
+    }()
+}
+final class DockActions: NSObject {
+    static let shared = DockActions()
+    @objc func settings() { Aurel.settings.open() }
+    @objc func agents() { agentsUI.openView() }
 }
 
 // The menu bar icon: quick actions.
@@ -6127,7 +6275,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     override init() {
         super.init()
-        item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Atticus")
+        item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Aurel")
         let m = NSMenu(); m.delegate = self; item.menu = m
         item.isVisible = Prefs.bool("menuIcon")
         paint()
@@ -6137,22 +6285,22 @@ final class MenuBar: NSObject, NSMenuDelegate {
         m.removeAllItems()
         let keys = Prefs.str("hotkeyLabel")
         let hint = Prefs.str("input") == "type" ? "Press \(keys) to type" : Prefs.str("talkMode") == "toggle" ? "Press \(keys) to talk · again to send" : "Hold \(keys) and talk"
-        let head = NSMenuItem(title: Prefs.bool("paused") ? "Atticus is paused" : hint, action: nil, keyEquivalent: "")
+        let head = NSMenuItem(title: Prefs.bool("paused") ? "Aurel is paused" : hint, action: nil, keyEquivalent: "")
         head.attributedTitle = NSAttributedString(string: head.title, attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold), .foregroundColor: NSColor.secondaryLabelColor])
         head.isEnabled = false; m.addItem(head)
         m.addItem(.separator())
-        add(m, "Ask Atticus", #selector(ask), "", "waveform")
+        add(m, "Ask Aurel", #selector(ask), "", "waveform")
         add(m, agentsUI.count > 0 ? "Agents · \(agentsUI.count) running…" : "Agents…", #selector(openAgents), "", "person.2")
         if agentsUI.hasLive || agentsUI.lingering { add(m, Prefs.bool("agentsHidden") ? "Show Agent Shelf" : "Hide Agent Shelf", #selector(hideAgents), "", Prefs.bool("agentsHidden") ? "eye" : "eye.slash") }
         add(m, "Dictation History…", #selector(dictationHistory), "", "clock.arrow.circlepath")
         if pasteHotkeyRegistered && (app.lastDictation ?? DictationData.archive.history.first?.text) != nil {
             add(m, "Paste Last Dictation", #selector(pasteDictation), "v", "doc.on.clipboard"); m.items.last?.keyEquivalentModifierMask = [.control, .command]
         }
-        add(m, Prefs.bool("paused") ? "Resume Atticus" : "Pause Atticus", #selector(pause), "", Prefs.bool("paused") ? "play.fill" : "pause.fill")
+        add(m, Prefs.bool("paused") ? "Resume Aurel" : "Pause Aurel", #selector(pause), "", Prefs.bool("paused") ? "play.fill" : "pause.fill")
         m.addItem(.separator())
         add(m, "Settings…", #selector(openSettings), ",", "gearshape")
         m.addItem(.separator())
-        add(m, "Quit Atticus", #selector(quit), "q", "power")
+        add(m, "Quit Aurel", #selector(quit), "q", "power")
     }
     @discardableResult func add(_ m: NSMenu, _ t: String, _ a: Selector?, _ k: String, _ symbol: String) -> NSMenuItem {
         let i = NSMenuItem(title: t, action: a, keyEquivalent: k); i.target = self
@@ -6170,8 +6318,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
     @objc func quit() { NSApp.terminate(nil) }
 }
 
-// Settings window (ui/settings.html): every setting lives in Prefs; atticus.py reads the same file.
-// Apps Atticus may control. macOS asks once per app, only while that app runs, and has no "allow all". So Settings > Apps
+// Settings window (Settings.swift draws it): every setting lives in Prefs; aurel.py reads the same file.
+// Apps Aurel may control. macOS asks once per app, only while that app runs, and has no "allow all". So Settings > Apps
 // lists every installed app and asks for all the ticked ones in one go: start each hidden, ask, quit it again.
 // macOS only answers "allowed?" for running apps, so what it said is kept in UserDefaults ("allowedApps").
 enum Apps {
@@ -6272,14 +6420,14 @@ enum Apps {
                 guard wait(answered, 20), r.code == OSStatus(procNotFound) else { break }
                 Thread.sleep(forTimeInterval: 0.25)
             }
-            started?.terminate()   // only the ones Atticus started
-            progress(id, statuses([id])[id]!)
+            progress(id, statuses([id])[id]!)   // before quitting it: a quit app can't be checked, so its answer wouldn't be saved
+            started?.terminate()   // only the ones Aurel started
         }
     }
 }
 
-final class SettingsWindow: NSObject, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate {
-    var win: NSWindow?, web: WKWebView?
+final class SettingsWindow: NSObject, NSWindowDelegate {
+    var win: NSWindow?, model: SettingsModel?   // the content is SettingsModel and its view (Settings.swift)
 
     var tab = "", timer: Timer?   // tab: shown once the page loads
     var revealing: [String: Any]?   // a memory item to show once the page loads
@@ -6289,48 +6437,47 @@ final class SettingsWindow: NSObject, WKScriptMessageHandler, WKNavigationDelega
     }
 
     func open(tab t: String = "") {
-        NSApp.activate(ignoringOtherApps: true)
-        if let w = win { w.makeKeyAndOrderFront(nil); push(); refresh(); if !t.isEmpty { js("st.tab('\(t)')") }; return }
+        if let w = win { Dock.show(w); push(); refresh(); if !t.isEmpty { model?.openSection(t) }; return }
         tab = t
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 560),
                          styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         applySharing(w)
-        w.titlebarAppearsTransparent = true; w.titleVisibility = .hidden; w.title = "Atticus Settings"
+        w.titlebarAppearsTransparent = true; w.titleVisibility = .hidden; w.title = "Aurel Settings"
         w.isReleasedWhenClosed = false; w.delegate = self
         w.contentMinSize = NSSize(width: 700, height: 460); w.contentMaxSize = NSSize(width: 1000, height: 820)   // wider only spreads the page into empty space
         w.collectionBehavior.insert(.fullScreenNone)   // the green button zooms up to the max size
         let bg = NSVisualEffectView(frame: w.contentRect(forFrameRect: w.frame))
         bg.material = .underWindowBackground; bg.blendingMode = .behindWindow; bg.state = .active
-        let cfg = WKWebViewConfiguration()
-        cfg.userContentController.add(self, name: "st")
-        let v = WKWebView(frame: bg.bounds, configuration: cfg)
-        v.autoresizingMask = [.width, .height]; v.setValue(false, forKey: "drawsBackground"); v.navigationDelegate = self
-        loadPage(v, "settings.html")
+        let m = SettingsModel(); m.post = { [weak self] in self?.handle($0) }
+        let v = NSHostingView(rootView: SettingsView(m: m))
+        v.frame = bg.bounds; v.autoresizingMask = [.width, .height]
         let bar = TitleBar(frame: NSRect(x: 0, y: bg.bounds.height - 28, width: bg.bounds.width, height: 28)); bar.autoresizingMask = [.width, .minYMargin]
         bg.addSubview(v); bg.addSubview(bar); w.contentView = bg
-        win = w; web = v
-        w.center(); w.setFrameUsingName("AtticusSettings"); w.setFrameAutosaveName("AtticusSettings")
+        win = w; model = m
+        push(); refresh(); DispatchQueue.global().async { [weak self] in self?.send("perms", Onboarding.perms()) }
+        if !tab.isEmpty { m.openSection(tab); tab = "" }; if let r = revealing { send("reveal", r); revealing = nil }
+        w.center(); w.setFrameUsingName("AurelSettings"); w.setFrameAutosaveName("AurelSettings")
         let saved = w.contentRect(forFrameRect: w.frame).size   // a frame saved before the max size existed (or full screen) shrinks to fit
         if saved.width > w.contentMaxSize.width || saved.height > w.contentMaxSize.height {
             w.setContentSize(NSSize(width: min(saved.width, w.contentMaxSize.width), height: min(saved.height, w.contentMaxSize.height))); w.center()
         }
-        w.makeKeyAndOrderFront(nil)
+        Dock.show(w)
         Onboarding.connectors { [weak self] c in self?.send("connectors", c) }
-        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in   // System Settings changes them behind our back
+        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self, weak w] _ in   // System Settings changes them behind our back
+            guard w?.occlusionState.contains(.visible) == true else { return }   // minimized or covered: the next tick in view catches up
             DispatchQueue.global().async { self?.send("perms", Onboarding.perms()); self?.send("mics", microphoneChoices()); self?.send("globe", globeKeyTaken()); self?.send("parakeet", Parakeet.shared.status()); self?.send("llm", LocalAI.shared.status()) }
         }
     }
 
-    func webView(_ v: WKWebView, didFinish n: WKNavigation!) { push(); refresh(); DispatchQueue.global().async { [weak self] in self?.send("perms", Onboarding.perms()) }; if !tab.isEmpty { js("st.tab('\(tab)')"); tab = "" }; if let r = revealing { send("reveal", r); revealing = nil } }
 
     func send(_ call: String, _ v: Any) {
-        DispatchQueue.main.async { [weak self] in callJS(self?.web, "st." + call, [v]) }
+        DispatchQueue.main.async { [weak self] in self?.model?.receive(call, v) }
     }
 
     func push() {   // the settings, and the app icon for the sidebar
         send("dictation", DictationData.state())
         send("parakeet", Parakeet.shared.status()); send("llm", LocalAI.shared.status())
-        js("st.motion(\(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion))")
+        model?.receive("motion", NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         var d: [String: Any] = ["prefs": Prefs.d, "mics": microphoneChoices(), "version": Updater.version, "update": Updater.status, "managedUpdates": Updater.managedByNix, "sharingUnavailable": ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27,
                                 "hotkeyTaken": !hotkeyRegistered, "dictateHotkeyTaken": !Prefs.str("dictateHotkeyLabel").isEmpty && !dictateHotkeyRegistered, "globeTaken": globeKeyTaken()]
         let routines = (Prefs.path as NSString).deletingLastPathComponent + "/routines.json"
@@ -6338,22 +6485,23 @@ final class SettingsWindow: NSObject, WKScriptMessageHandler, WKNavigationDelega
         if let t = NSApp.applicationIconImage?.tiffRepresentation, let png = NSBitmapImageRep(data: t)?.representation(using: .png, properties: [:]) {
             d["icon"] = "data:image/png;base64," + png.base64EncodedString()
         }
-        callJS(web, "st.load", [d])
+        model?.receive("load", d)
     }
 
-    func refresh() {   // usage, saved rules, Claude plan: atticus.py --state (it runs Claude Code, so off the main thread)
+    func refresh() {   // usage, saved rules, Claude plan: aurel.py --state (it runs Claude Code, so off the main thread)
         DispatchQueue.global().async { [weak self] in
             let p = py(["--state"]), out = Pipe(); p.standardOutput = out
             try? p.run(); p.waitUntilExit()
             let s = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             guard s.hasPrefix("{") else { return }
-            DispatchQueue.main.async { self?.web?.evaluateJavaScript("st.state(\(s))") }
+            guard let state = try? JSONSerialization.jsonObject(with: Data(s.utf8)) else { return }
+            DispatchQueue.main.async { self?.model?.receive("state", state) }
         }
     }
 
     // "Change shortcut": the next key chord, including modifier-only and Fn chords, becomes the talk shortcut. Esc cancels.
-    var monitor: Any?, recording = "main", recordedModifiers: NSEvent.ModifierFlags = [], echo: ((String) -> Void)?   // echo: setup's page when it records, so it gets the calls Settings would
-    func record(_ kind: String = "main", echo: ((String) -> Void)? = nil) {
+    var monitor: Any?, recording = "main", recordedModifiers: NSEvent.ModifierFlags = [], echo: ((String, [Any]) -> Void)?   // echo: setup when it records, so it gets the calls Settings would
+    func record(_ kind: String = "main", echo: ((String, [Any]) -> Void)? = nil) {
         if monitor != nil { return }
         recording = kind; recordedModifiers = []; self.echo = echo
         if let r = ref { UnregisterEventHotKey(r); ref = nil }
@@ -6365,7 +6513,7 @@ final class SettingsWindow: NSObject, WKScriptMessageHandler, WKNavigationDelega
             let f = e.modifierFlags.intersection([.command, .shift, .option, .control, .function])
             let mods = shortcutModifierLabel(f)
             if e.type == .flagsChanged {
-                if !f.isEmpty { recordedModifiers.formUnion(f); say("rec(\(Hands.quote(shortcutModifierLabel(recordedModifiers))))"); return nil }
+                if !f.isEmpty { recordedModifiers.formUnion(f); say("rec", shortcutModifierLabel(recordedModifiers)); return nil }
                 guard !recordedModifiers.isEmpty else { return nil }
                 let held = recordedModifiers; recordedModifiers = []
                 done((-2, shortcutModifiers(held), shortcutModifierLabel(held)))
@@ -6373,7 +6521,7 @@ final class SettingsWindow: NSObject, WKScriptMessageHandler, WKNavigationDelega
             }
             if e.keyCode == 53 && f.isEmpty { done(nil); return nil }   // Esc
             let fn = fkeys.firstIndex(of: Int(e.keyCode))
-            guard !f.isEmpty || fn != nil else { say("rec(\(Hands.quote("Add ⌃, ⌥, ⇧, ⌘ or fn")))"); return nil }
+            guard !f.isEmpty || fn != nil else { say("rec", "Add ⌃, ⌥, ⇧, ⌘ or fn"); return nil }
             let names: [UInt16: String] = [49: "Space", 36: "Return", 48: "Tab", 51: "Delete", 123: "←", 124: "→", 125: "↓", 126: "↑"]
             let key = fn.map { "F\($0 + 1)" } ?? names[e.keyCode] ?? (e.charactersIgnoringModifiers ?? "?").uppercased()
             recordedModifiers = []
@@ -6389,19 +6537,20 @@ final class SettingsWindow: NSObject, WKScriptMessageHandler, WKNavigationDelega
         if let n = new { Prefs.set(stem + "Code", n.code); Prefs.set(stem + "Mods", n.mods); Prefs.set(stem + "Label", n.label) }
         let otherRegistered = recording == "dictate" ? registerHotkey() : registerDictateHotkey()
         let registered = otherRegistered && (recording == "dictate" ? registerDictateHotkey() : registerHotkey())
-        if !registered {   // taken by another app or the other Atticus shortcut: keep the old one
+        if !registered {   // taken by another app or the other Aurel shortcut: keep the old one
             let own = new != nil && !Prefs.str("dictateHotkeyLabel").isEmpty && hotkeysConflict(hotkey(),dictateHotkey())
             Prefs.set(stem + "Code", old.0!); Prefs.set(stem + "Mods", old.1!); Prefs.set(stem + "Label", old.2!)
             registerHotkey(); registerDictateHotkey()
-            say("taken(\(Hands.quote(recording)),\(own))")
+            say("taken", recording, own)
         }
-        echo?("recorded(\(Hands.quote(Prefs.str(stem + "Label"))))"); echo = nil
+        echo?("recorded", [Prefs.str(stem + "Label")]); echo = nil
         recording = "main"
         push()
     }
 
-    func say(_ call: String) { if let echo { echo(call) } else { js("st." + call) } }
-    func js(_ s: String) { web?.evaluateJavaScript(s) }
+    func say(_ call: String, _ args: Any...) {   // setup's recorder, or Settings
+        if let echo { echo(call, args) } else { model?.receive(call, args.count == 1 ? args[0] : args) }
+    }
 
     func helper(_ args: [String]) { let p = py(args); try? p.run(); p.waitUntilExit() }
 
@@ -6415,7 +6564,7 @@ final class SettingsWindow: NSObject, WKScriptMessageHandler, WKNavigationDelega
         }
     }
 
-    func apply(_ k: String, _ v: Any) {   // one setting changed, from this window or by voice (atticus.py --set)
+    func apply(_ k: String, _ v: Any) {   // one setting changed, from this window or by voice (aurel.py --set)
         guard Prefs.set(k, v) else { push(); send("notice", ["text": "Couldn’t save that change, so the old setting is back."]); return }
         if k == "wakeWord" {
             if v as? Bool == true { app.enableWakeWord() }
@@ -6441,13 +6590,12 @@ final class SettingsWindow: NSObject, WKScriptMessageHandler, WKNavigationDelega
         if k == "paused" { if v as? Bool == true { app.close(clear: false); agentsUI.stopAll() }; bar.paint() }
         if k == "safe" { app.js("mode", v as? Bool == true) }
         if k == "login" {   // the LaunchAgent build.sh installed: enabled = starts at login
-            if ProcessInfo.processInfo.environment["ATTICUS_DIR"] != nil { Prefs.set("login",false); push(); return }
+            if ProcessInfo.processInfo.environment["AUREL_DIR"] != nil { Prefs.set("login",false); push(); return }
             let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            p.arguments = [v as? Bool == true ? "enable" : "disable", "gui/\(getuid())/com.atticus.app"]; try? p.run()
+            p.arguments = [v as? Bool == true ? "enable" : "disable", "gui/\(getuid())/com.aurel.app"]; try? p.run()
         }
     }
 
-    func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) { if let b = m.body as? [String: Any] { handle(b) } }
 
     func confirm(_ title: String, _ detail: String, _ button: String) -> Bool {
         let alert = NSAlert(); alert.messageText = title; alert.informativeText = detail; alert.addButton(withTitle: button); alert.addButton(withTitle: "Cancel")
@@ -6545,12 +6693,11 @@ final class SettingsWindow: NSObject, WKScriptMessageHandler, WKNavigationDelega
 
     func windowWillClose(_ n: Notification) {
         onboarding.permissionHelp.close()
-        if let v = web { v.evaluateJavaScript("st.flush()") { [weak self] r, _ in _ = v; if let b = r as? [String: Any] { self?.handle(b) } } }   // a deletion still showing Undo
+        if let b = model?.flush(send: false) { handle(b) }   // a deletion still showing Undo
         if monitor != nil { done(nil) }   // closed mid-recording: keep the old shortcut
         timer?.invalidate(); timer = nil
-        web?.configuration.userContentController.removeScriptMessageHandler(forName: "st")
         win?.setFrameAutosaveName("")   // frees the name for the next window; the frame is already saved
-        web = nil; win = nil
+        model = nil; win = nil
     }
 }
 
@@ -6683,12 +6830,12 @@ enum Hands {
     }
     static func checkStopped() throws { if stopped != 0 { throw Failure("Hands cancelled.") } }
     static let env = ProcessInfo.processInfo.environment
-    static var pinnedWindow = env["ATTICUS_HANDS_WINDOW"].flatMap(UInt32.init).flatMap { $0 > 0 ? String($0) : nil }
+    static var pinnedWindow = env["AUREL_HANDS_WINDOW"].flatMap(UInt32.init).flatMap { $0 > 0 ? String($0) : nil }
     // Per task (one hands state): each app's windows already open beside the window the task first acted in there are the user's, never a stand-in.
-    static var userWindowsFile = env["ATTICUS_HANDS_STATE"].map { URL(fileURLWithPath: $0 + ".windows") }
+    static var userWindowsFile = env["AUREL_HANDS_STATE"].map { URL(fileURLWithPath: $0 + ".windows") }
     static var claims = false   // this step acts (click, drag, type, press, menu): only then does the window root maps become the task's; reads and see never claim
     static var aim: CGPoint?   // a click's screen point: root maps the app's window there, not its focused one
-    static var state: URL { URL(fileURLWithPath: env["ATTICUS_HANDS_STATE"] ?? env["ATTICUS_DIR"].map { $0 + "/hands.json" } ?? "/tmp/atticus-hands-\(getuid()).json") }
+    static var state: URL { URL(fileURLWithPath: env["AUREL_HANDS_STATE"] ?? env["AUREL_DIR"].map { $0 + "/hands.json" } ?? "/tmp/aurel-hands-\(getuid()).json") }
     static let secretPattern = #"(?i)password|passcode|passphrase|passport|\bpin\b|card|cvv|cvc|security (answer|code)|\bssn\b|social security|api.?key|token|secret|one.?time|verification|auth.*code|2fa|\botp\b|bank|account.?number|routing|iban|tax.?id|recovery|seed|mnemonic"#
     static let riskyPattern = #"(?i)\b(buy|purchase|pay|payment|checkout|order|send|delete|remove|trash|submit|publish|post|sign.?out|log.?out|unsubscribe|subscribe|transfer|bid|erase|withdraw|donate|authorize|grant access|allow access|logout|book|reserve|merge|deploy|discard|wipe|format|apply(?! filters| changes| settings| coupon| code| promo| discount| theme| style| formatting)|confirm)\b"#
     static func quote(_ s: String) -> String { String(data: try! JSONEncoder().encode(s), encoding: .utf8)! }
@@ -6788,10 +6935,12 @@ enum Hands {
                 }
                 nearby += children(item)
             }
+            // A name borrowed from what sits beside it (Fastmail's unnamed ▾ beside "Compose"): never mistaken for that control itself.
+            if !parts.isEmpty { return String(("next to " + parts.joined(separator:" ")).prefix(160)) }
         }
         return String(parts.joined(separator:" ").prefix(160))
     }
-    static func trusted() throws { guard AXIsProcessTrusted() else { throw Failure("Allow Atticus in System Settings → Privacy & Security → Accessibility") }; AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(),0.15) }
+    static func trusted() throws { guard AXIsProcessTrusted() else { throw Failure("Allow Aurel in System Settings → Privacy & Security → Accessibility") }; AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(),0.15) }
     static func app(_ request: String? = nil) throws -> NSRunningApplication {
         if let request, !request.isEmpty {
             if let pid = Int32(request), let a = NSRunningApplication(processIdentifier: pid) { MiniScreen.work(a); return a }
@@ -7159,7 +7308,7 @@ enum Hands {
         if act {   // a press can bring the app forward: tell the focus guard it's on purpose, then put the user's app back
             try keysReachTask(a.processIdentifier)
             lease = try screenLease()
-            DistributedNotificationCenter.default().postNotificationName(.init("atticus.raise"), object: nil, deliverImmediately: true)
+            DistributedNotificationCenter.default().postNotificationName(.init("aurel.raise"), object: nil, deliverImmediately: true)
             usleep(50_000); restore = restoreFocus(a)
         }
         defer { if let restore { usleep(30_000); restore() }; if let lease { flock(lease,LOCK_UN); Darwin.close(lease) } }
@@ -7263,7 +7412,7 @@ enum Hands {
     static func windowAt(_ p: CGPoint, _ pid: Int32) -> UInt32? {
         windowsAt(p).first { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }.flatMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value }
     }
-    // Visible app windows (layer 0: never Atticus's own panels) containing p, front to back; none when a task window is pinned.
+    // Visible app windows (layer 0: never Aurel's own panels) containing p, front to back; none when a task window is pinned.
     static func windowsAt(_ p: CGPoint) -> [[String:Any]] {
         guard pinnedWindow == nil else { return [] }
         return ((CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String:Any]]) ?? []).filter {
@@ -7277,13 +7426,23 @@ enum Hands {
         let owner = aim.flatMap { (windowsAt($0).first?[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value }
         return try app(String(owner ?? old.pid))
     }
+    // macOS ignores activate() from a process that isn't active itself (the hands helper never is); Launch Services still does it.
+    static func bringForward(_ a: NSRunningApplication) -> Bool {
+        func front() -> Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == a.processIdentifier }
+        a.activate(); usleep(30_000)
+        if !front(), let url = a.bundleURL {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/open"); p.arguments = ["-a", url.path]; try? p.run(); p.waitUntilExit()
+            for _ in 0..<20 where !front() { usleep(50_000) }
+        }
+        return front()
+    }
     static func restoreFocus(_ a: NSRunningApplication) -> () -> Void {
         if MiniScreen.workInFront { return {} }
         let previous = NSWorkspace.shared.frontmostApplication
         let window = previous.flatMap { element(AXUIElementCreateApplication($0.processIdentifier),kAXFocusedWindowAttribute) }
         return {
             guard let previous, previous != a, !previous.isTerminated, NSWorkspace.shared.frontmostApplication == a else { return }
-            previous.activate()
+            _ = bringForward(previous)
             if let window { _ = perform(window,["AXRaise"]) }
         }
     }
@@ -7316,7 +7475,7 @@ enum Hands {
         throw Failure("Keys would go to another \(a.localizedName ?? "app") window, not this task's. Nothing was pressed.")
     }
     static func mouse(_ from: CGPoint, _ a: NSRunningApplication, double: Bool = false, right: Bool = false, to: CGPoint? = nil, front: Bool = false) throws {
-        guard env["ATTICUS_AX_ONLY"] != "1" else { throw Failure("Quartz mouse actions disabled for this fixture.") }
+        guard env["AUREL_AX_ONLY"] != "1" else { throw Failure("Quartz mouse actions disabled for this fixture.") }
         let pid = a.processIdentifier, window = windowAt(from, a.processIdentifier) ?? targetWindow(a), gesture = Int64(DispatchTime.now().uptimeNanoseconds % 1_000_000_000)
         if front || window == 0 || MiniScreen.workInFront { return try frontMouse(from, a, double: double, right: right, to: to) }   // no known window: never an unbound event
         guard let source = CGEventSource(stateID: .hidSystemState) else { throw Failure("Could not create mouse event.") }
@@ -7349,12 +7508,12 @@ enum Hands {
     }
     static func screenLease() throws -> Int32 { try lease("screen.lock") }
     static var leaseWaited = false
-    // Locks shared by every Atticus process (the app and each hands helper): the screen, the clipboard, one app's input.
+    // Locks shared by every Aurel process (the app and each hands helper): the screen, the clipboard, one app's input.
     static func lease(_ name: String, wait: Bool = true) throws -> Int32 {
         let root = (Prefs.path as NSString).deletingLastPathComponent
         let fd = Darwin.open(root + "/" + name, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { throw Failure("Could not lock \(name).") }
-        let waiting = name == "screen.lock" ? env["ATTICUS_ASK"].map { $0 + "/screen-wait" } : nil
+        let waiting = name == "screen.lock" ? env["AUREL_ASK"].map { $0 + "/screen-wait" } : nil
         defer { if let waiting { try? FileManager.default.removeItem(atPath: waiting) } }
         leaseWaited = false
         do {
@@ -7369,7 +7528,7 @@ enum Hands {
     }
     static func unlock(_ fd: Int32) { flock(fd, LOCK_UN); Darwin.close(fd) }
     static func fingerprint(_ map: Map, around spot: CGPoint? = nil) -> [UInt8] {
-        // No disk image is kept. With a spot: the real screen 64x40 points around it, minus Atticus's own ring and box, so a
+        // No disk image is kept. With a spot: the real screen 64x40 points around it, minus Aurel's own ring and box, so a
         // click shows whether it took even when the target window is full screen or on another Space, where a window-only
         // capture returns a stale frame. Without a spot (scroll, settle): the target window's content, 64x40.
         final class Capture { let lock = NSLock(); var image: CGImage? }
@@ -7408,16 +7567,24 @@ enum Hands {
     // The foreground route: the app comes forward and the real pointer acts, then the pointer and the user's app go back.
     // Used for work the user asked to see, a window without a known id, and a scroll nothing else could move.
     static func raise(_ a: NSRunningApplication) throws {
-        DistributedNotificationCenter.default().postNotificationName(.init("atticus.raise"), object: nil, deliverImmediately: true)   // tell the focus guard this one is on purpose
+        DistributedNotificationCenter.default().postNotificationName(.init("aurel.raise"), object: nil, deliverImmediately: true)   // tell the focus guard this one is on purpose
         usleep(50_000)   // let the guard hear it before the app comes forward
-        let (_, w) = try root(a); _ = perform(w, ["AXRaise"]); a.activate(); usleep(30_000)
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == a.processIdentifier else { throw Failure("Could not focus the mapped app.") }
+        let (_, w) = try root(a); _ = perform(w, ["AXRaise"])
+        guard bringForward(a) else { throw Failure("Could not focus the mapped app.") }
+        _ = perform(w, ["AXRaise"])   // its task window, not whichever one it was showing
     }
     static func frontMouse(_ from: CGPoint, _ a: NSRunningApplication, double: Bool, right: Bool, to: CGPoint?) throws {
+        try inFront(a) { try frontClicks(from, double: double, right: right, to: to) }
+    }
+    // The app forward for a few steps on the real pointer and keys, then the user's app back.
+    static func inFront(_ a: NSRunningApplication, _ body: () throws -> Void) throws {
         _ = NSApplication.shared   // the real pointer needs a window-server connection; the hands helper has none until now
         let lease = try screenLease(); defer { unlock(lease) }
         let restore = restoreFocus(a); defer { usleep(30_000); restore() }
         try raise(a)
+        try body()
+    }
+    static func frontClicks(_ from: CGPoint, double: Bool = false, right: Bool = false, to: CGPoint? = nil) throws {
         guard let source = CGEventSource(stateID: .privateState), let saved = CGEvent(source: source)?.location else { throw Failure("Could not create mouse event.") }
         let button: CGMouseButton = right ? .right : .left
         defer { CGWarpMouseCursorPosition(saved) }
@@ -7460,7 +7627,7 @@ enum Hands {
         guard let area = found.sorted(by: { target == nil ? frame($0).width * frame($0).height > frame($1).width * frame($1).height : frame($0).width * frame($0).height < frame($1).width * frame($1).height }).first else { throw Failure("No scroll area.") }; return area
     }
     static func wheel(_ direction: String, _ spot: CGPoint, _ a: NSRunningApplication, fraction: Double = 1, front: Bool = false) throws {
-        guard env["ATTICUS_AX_ONLY"] != "1" else { throw Failure("Quartz mouse actions disabled for this fixture.") }
+        guard env["AUREL_AX_ONLY"] != "1" else { throw Failure("Quartz mouse actions disabled for this fixture.") }
         let pid = a.processIdentifier, window = targetWindow(a)
         if front || window == 0 || MiniScreen.workInFront { return try frontWheel(direction, spot, a, fraction: fraction) }
         guard let source = CGEventSource(stateID: .hidSystemState) else { throw Failure("Could not create scroll event.") }
@@ -7490,16 +7657,16 @@ enum Hands {
         for _ in 0..<(all ? 50 : Int(ceil(pages))) {
             try checkStopped()
             let before = try capture(a), value = bar.flatMap { attribute($0, kAXValueAttribute) as? NSNumber }?.doubleValue
-            let pixels = value == nil && env["ATTICUS_AX_ONLY"] != "1" ? fingerprint(before) : []
+            let pixels = value == nil && env["AUREL_AX_ONLY"] != "1" ? fingerprint(before) : []
             if let value, abs(value - end) < 0.001 { atEnd = true; break }
             var methods: [() throws -> Void] = [
                 { if fraction == 1 { _ = perform(area, ["AXScroll\(direction.capitalized)ByPage"]) } },
                 { if let bar { _ = perform(bar, [positive ? "AXIncrement" : "AXDecrement"]) } },
                 { if let bar, let value { _ = AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, NSNumber(value: all ? end : max(0,min(1,value + (positive ? 0.15 : -0.15) * fraction)))) } },
                 { if fraction == 1 && pageKeysAllowed(a) { try sendKeys(["down":"pagedown","up":"pageup","left":"left","right":"right"][direction]!, pid: a.processIdentifier) } },
-                { if env["ATTICUS_AX_ONLY"] != "1" { try wheel(direction, target ?? CGPoint(x: frame(area).midX,y: frame(area).midY), a, fraction:fraction) } },
-                { if env["ATTICUS_AX_ONLY"] != "1" { try wheel(direction, CGPoint(x: frame(area).midX,y: positive ? frame(area).maxY - 10 : frame(area).minY + 10), a, fraction:fraction) } },
-                { if env["ATTICUS_AX_ONLY"] != "1" { try wheel(direction, target ?? CGPoint(x: frame(area).midX,y: frame(area).midY), a, fraction:fraction, front:true) } }
+                { if env["AUREL_AX_ONLY"] != "1" { try wheel(direction, target ?? CGPoint(x: frame(area).midX,y: frame(area).midY), a, fraction:fraction) } },
+                { if env["AUREL_AX_ONLY"] != "1" { try wheel(direction, CGPoint(x: frame(area).midX,y: positive ? frame(area).maxY - 10 : frame(area).minY + 10), a, fraction:fraction) } },
+                { if env["AUREL_AX_ONLY"] != "1" { try wheel(direction, target ?? CGPoint(x: frame(area).midX,y: frame(area).midY), a, fraction:fraction, front:true) } }
             ]
             // AX and PID-key paths first; the background wheel next; the foreground wheel only after nothing else moved.
             if all, let bar { var writable = DarwinBoolean(false); AXUIElementIsAttributeSettable(bar,kAXValueAttribute as CFString,&writable); if writable.boolValue { methods.insert({ _ = AXUIElementSetAttributeValue(bar,kAXValueAttribute as CFString,NSNumber(value:end)) },at:0) } }
@@ -7625,7 +7792,7 @@ enum Hands {
         if write == .success {
             guard stringValue(target.field) == expected else { throw Failure("Text changed outside the verified caret; undo before continuing.") }
         } else {
-            let clipboard = try lease("clipboard.lock"); defer { unlock(clipboard) }   // one clipboard borrower at a time, across Atticus processes
+            let clipboard = try lease("clipboard.lock"); defer { unlock(clipboard) }   // one clipboard borrower at a time, across Aurel processes
             guard stringValue(target.field) == target.old, selectedRange(target.field).map({ $0.location == range.location && $0.length == 0 }) == true else { throw Failure("The document changed before typing.") }
             let pb = NSPasteboard.general, saved = pb.pasteboardItems?.map { i in i.types.compactMap { t in i.data(forType:t).map { (t,$0) } } } ?? []
             pb.clearContents(); guard pb.setString(draft,forType:.string) else { throw Failure("Could not prepare paste.") }; let changed = pb.changeCount
@@ -7636,18 +7803,25 @@ enum Hands {
         guard stringValue(target.anchor).map({ ($0 as NSString).range(of:text).location != NSNotFound }) ?? (rank(name(target.anchor),text) == 4) else { throw Failure("The anchor text changed; undo before continuing.") }
         return "Typed after \(quote(mask(text)))"
     }
-    static func typeText(_ text: String, _ n: Node, _ e: AXUIElement, _ a: NSRunningApplication, append: Bool) throws {
-        guard ["AXTextField","AXTextArea","AXComboBox","AXSearchField","AXSecureTextField"].contains(n.role) else { throw Failure("Target is not a text field.") }
-        guard AXUIElementSetAttributeValue(e,kAXFocusedAttribute as CFString,kCFBooleanTrue) == .success else { throw Failure("Could not focus that field.") }
+    // A childless control drawn around other mapped controls hides its contents from AX: a web chat composer (Muse: its text box,
+    // Attach and Send are one button). AXPress clicks the whole container, which can land on any of them (Muse opens Attach),
+    // so it gets a real click at its center, where a person's lands: the text box.
+    static func wraps(_ n: Node, _ e: AXUIElement, _ map: Map) -> Bool {
+        let r = CGRect(x:n.frame[0],y:n.frame[1],width:n.frame[2],height:n.frame[3])
+        return children(e).isEmpty && map.nodes.contains { $0.id != n.id && $0.frame[2] * $0.frame[3] < r.width * r.height && r.contains($0.spot) }
+    }
+    static func typeText(_ text: String, _ n: Node, _ e: AXUIElement, _ a: NSRunningApplication, append: Bool, box: Bool = false) throws {
+        guard box || ["AXTextField","AXTextArea","AXComboBox","AXSearchField","AXSecureTextField"].contains(n.role) else { throw Failure("Target is not a text field.") }
+        guard box || AXUIElementSetAttributeValue(e,kAXFocusedAttribute as CFString,kCFBooleanTrue) == .success else { throw Failure("Could not focus that field.") }
         let old = attribute(e,kAXValueAttribute) as? String ?? "", draft = append ? old + text : text
-        if AXUIElementSetAttributeValue(e,kAXValueAttribute as CFString,draft as CFString) == .success {
+        if !box, AXUIElementSetAttributeValue(e,kAXValueAttribute as CFString,draft as CFString) == .success {
             guard attribute(e,kAXValueAttribute) as? String == draft else { throw Failure("Text did not land in the field.") }; return
         }
-        let clipboard = try lease("clipboard.lock"); defer { unlock(clipboard) }   // one clipboard borrower at a time, across Atticus processes
+        let clipboard = try lease("clipboard.lock"); defer { unlock(clipboard) }   // one clipboard borrower at a time, across Aurel processes
         guard attribute(e,kAXValueAttribute) as? String ?? "" == old else { throw Failure("The field changed before typing. Run see again.") }
         // Cmd-Right only reaches the end of the caret's line, so place and verify the caret at the value's end.
         var end = CFRange(location:(old as NSString).length,length:0)
-        if append { guard let value = AXValueCreate(.cfRange,&end), AXUIElementSetAttributeValue(e,kAXSelectedTextRangeAttribute as CFString,value) == .success,
+        if append && !box { guard let value = AXValueCreate(.cfRange,&end), AXUIElementSetAttributeValue(e,kAXSelectedTextRangeAttribute as CFString,value) == .success,
                           selectedRange(e).map({ $0.location == end.location && $0.length == 0 }) == true else { throw Failure("Could not verify the caret at the end of that field.") } }
         // PID-directed paste keeps focus in the user’s app; verify the same field before reporting success.
         let pb = NSPasteboard.general, saved = pb.pasteboardItems?.map { i in i.types.compactMap { t in i.data(forType:t).map { (t,$0) } } } ?? []
@@ -7655,11 +7829,12 @@ enum Hands {
         defer { if pb.changeCount == changed { pb.clearContents(); pb.writeObjects(saved.map { pairs in let i = NSPasteboardItem(); pairs.forEach { i.setData($1,forType:$0) }; return i }) } }
         if !append { try sendKeys("cmd+a",pid:a.processIdentifier) }
         try sendKeys("cmd+v",pid:a.processIdentifier); usleep(150_000)
-        if !n.secret, attribute(e,kAXValueAttribute) as? String != draft { throw Failure("Could not verify the pasted text.") }
+        // A box's text is invisible to AX: its caller checks the screen instead.
+        if !box, !n.secret, attribute(e,kAXValueAttribute) as? String != draft { throw Failure("Could not verify the pasted text.") }
     }
     static func settle(_ a: NSRunningApplication, seconds: Double) throws -> Bool {
         let start = Date(), initial = try capture(a); var last = initial.settled, since = Date()
-        let usePixels = !initial.rich && env["ATTICUS_AX_ONLY"] != "1"
+        let usePixels = !initial.rich && env["AUREL_AX_ONLY"] != "1"
         var pixels = usePixels ? fingerprint(initial) : []
         while Date().timeIntervalSince(start) < seconds {
             try checkStopped()
@@ -7768,7 +7943,7 @@ enum Hands {
             let (code, _) = try keys(args[1])
             if [CGKeyCode(51),CGKeyCode(117)].contains(code),
                let focused = element(AXUIElementCreateApplication(a.processIdentifier),kAXFocusedUIElementAttribute),
-               selectedRange(focused) != nil { throw Failure("Backspace cannot prove the text belongs to Atticus. Undo Atticus's last edit with cmd+z instead.") }
+               selectedRange(focused) != nil { throw Failure("Backspace cannot prove the text belongs to Aurel. Undo Aurel's last edit with cmd+z instead.") }
         }
         let keyRisk = verb == "press" ? try riskyKey(args[1]) : false
         let risk = labels.contains { $0.hasPrefix("Unidentified screen point ") || riskyLabel($0,map) || (verb == "drag" && matches($0,#"(?i)\b(bin|recycle)\b"#)) } || keyRisk || (verb == "type" && args.dropFirst(3).contains("submit"))
@@ -7779,7 +7954,7 @@ enum Hands {
         defer { restoreAccessibility() }
         let started = DispatchTime.now().uptimeNanoseconds
         defer {
-            if env["ATTICUS_HANDS_TIMING"] == "1" {
+            if env["AUREL_HANDS_TIMING"] == "1" {
                 let ms = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
                 FileHandle.standardError.write(Data("HANDS NET \(String(format:"%.2f",ms)) ms\n".utf8))
             }
@@ -7796,7 +7971,7 @@ enum Hands {
             if input.first == "read" {
                 guard input.count <= 3 && (input.count < 3 || input[2] == "more") else { throw Failure("Use read [app] [more].") }
                 try trusted()
-                let text = try read(try app(input.count > 1 ? input[1] : nil), more: input.count == 3, head: env["ATTICUS_HANDS_HEAD"] == "1")
+                let text = try read(try app(input.count > 1 ? input[1] : nil), more: input.count == 3, head: env["AUREL_HANDS_HEAD"] == "1")
                 print(String(data: try JSONSerialization.data(withJSONObject: text), encoding: .utf8)!); return 0
             }
             try validate(input); try trusted()
@@ -7815,7 +7990,7 @@ enum Hands {
             let old = try load(), a = try aimed(input, old); var before = try capture(a)
             let check = try checked(input, before, a)
             try freshIDs(input,old,before)
-            if env["ATTICUS_HANDS_SESSION"] == "1" {
+            if env["AUREL_HANDS_SESSION"] == "1" {
                 print(String(data:try JSONSerialization.data(withJSONObject:check),encoding:.utf8)!); fflush(stdout)
                 let answer = String(data:FileHandle.standardInput.readDataToEndOfFile(),encoding:.utf8)?.trimmingCharacters(in:.whitespacesAndNewlines)
                 guard answer == "y" else { throw Failure("Action cancelled.") }
@@ -7827,11 +8002,11 @@ enum Hands {
                     before = fresh
                 }
             } else {
-                let data = env["ATTICUS_HANDS_RECEIPT"] == "1" ? FileHandle.standardInput.readDataToEndOfFile() : Data()
+                let data = env["AUREL_HANDS_RECEIPT"] == "1" ? FileHandle.standardInput.readDataToEndOfFile() : Data()
                 let receipt = (try? JSONSerialization.jsonObject(with:data)) as? [String:Any]
                 if let receipt {
                     guard NSDictionary(dictionary:receipt).isEqual(to:check) else { throw Failure("The screen changed while checking permission. Run see again.") }
-                } else if (check["risky"] as? Bool == true && Prefs.bool("safe")) || (input[0] == "type" && check["secure"] as? Bool == true) { throw Failure("Use atticus.py --hands so the user can allow this action.") }
+                } else if (check["risky"] as? Bool == true && Prefs.bool("safe")) || (input[0] == "type" && check["secure"] as? Bool == true) { throw Failure("Use aurel.py --hands so the user can allow this action.") }
             }
             // One app's input stays whole: another task's action in the same app finishes first, then this target is checked again.
             let inputLock = input[0] == "wait" ? nil : try lease("hands-\(a.bundleIdentifier ?? String(a.processIdentifier)).lock"); defer { if let inputLock { unlock(inputLock) } }
@@ -7851,10 +8026,10 @@ enum Hands {
                 else {
                     let (near,double,right,front) = try clickOptions(Array(input.dropFirst())), (n,e) = try resolve(input[1],map:before,a:a,near:near), at = exact ?? n.spot; spot = at
                     // Pressing the element around an unmapped point clicks its center, not the point.
-                    if let e, exact == nil || n.id != 0, !double && !right && !front, perform(e,["AXPress","AXPick","AXConfirm","AXOpen"]) { }
+                    if let e, exact == nil || n.id != 0, !double && !right && !front, !wraps(n,e,before), perform(e,["AXPress","AXPick","AXConfirm","AXOpen"]) { }
                     else {
                         // A mouse click can change only pixels (a canvas, a map, a video); they show whether it took.
-                        if env["ATTICUS_AX_ONLY"] != "1" { spotPixels = fingerprint(before, around: at) }
+                        if env["AUREL_AX_ONLY"] != "1" { spotPixels = fingerprint(before, around: at) }
                         try gesture(front) { try mouse(at,a,double:double,right:right,front:$0) }
                     }
                     result = "Clicked \(quote(n.label))"
@@ -7871,7 +8046,7 @@ enum Hands {
                 if let (item, label) = menuShortcut(input[1],a) {
                     try keysReachTask(a.processIdentifier)   // the menu command acts on the app's focused window, so it must be this task's
                     let lease = try screenLease(); defer { unlock(lease) }   // as menu(): a press can bring the app forward, so put the user's app back
-                    DistributedNotificationCenter.default().postNotificationName(.init("atticus.raise"), object: nil, deliverImmediately: true)
+                    DistributedNotificationCenter.default().postNotificationName(.init("aurel.raise"), object: nil, deliverImmediately: true)
                     usleep(50_000); let restore = restoreFocus(a); defer { usleep(30_000); restore() }
                     for _ in 0..<times { try checkStopped(); guard perform(item,["AXPress"]) else { throw Failure("Could not run \(quote(label)).") }; usleep(15_000) }
                     result = "Ran \(quote(label)) for \(quote(input[1])) in \(a.localizedName ?? "app")"
@@ -7879,17 +8054,31 @@ enum Hands {
             case "drag": let from = try resolve(input[1],map:before,a:a).0, to = try resolve(input[2],map:before,a:a).0; try gesture { try mouse(from.spot,a,to:to.spot,front:$0) }; spot = to.spot; result = "Dragged \(quote(from.label)) to \(quote(to.label))"
             case "type":
                 let (n,e) = try resolve(input[1],map:before,a:a); guard let e else { throw Failure("No editable field.") }
-                spot = n.spot; try typeText(input[2],n,e,a,append:input.dropFirst(3).contains("append"))
-                if input.dropFirst(3).contains("submit") {
-                    let typed = stringValue(e), submitted = try capture(a), deadline = Date().addingTimeInterval(0.5), sent = mask(String(input[2].prefix(60)))
-                    try sendKeys("return",pid:a.processIdentifier)
-                    var accepted = false
-                    repeat {
-                        usleep(50_000)
-                        accepted = submitReceipt(typed, stringValue(e), sent, submitted, try capture(a))
-                    } while !accepted && Date() < deadline
-                    if !accepted { throw Failure("Could not verify Return was accepted in the background. Read the window; if it was not sent, click its send button.") }
+                let box = wraps(n,e,before)
+                spot = n.spot
+                func typing() throws {
+                    // Its text box is hidden from AX: click into it first, and see the words show where they start, left of its middle.
+                    let start = CGPoint(x: n.frame[0] + min(80, n.frame[2] / 2), y: n.spot.y)
+                    if box { try frontClicks(n.spot); usleep(150_000) }
+                    let shown = box ? fingerprint(before, around: start) : []
+                    try typeText(input[2],n,e,a,append:input.dropFirst(3).contains("append"),box:box)
+                    if box { usleep(100_000) }
+                    if box, shown.isEmpty || !pixelsChanged(shown, fingerprint(before, around: start), threshold: 1.5) {
+                        throw Failure("Could not see the text land in \(quote(n.label)). Nothing was sent; read the window before typing again.")
+                    }
+                    if input.dropFirst(3).contains("submit") {
+                        let typed = stringValue(e), submitted = try capture(a), deadline = Date().addingTimeInterval(0.5), sent = mask(String(input[2].prefix(60)))
+                        try sendKeys("return",pid:a.processIdentifier)
+                        var accepted = false
+                        repeat {
+                            usleep(50_000)
+                            accepted = submitReceipt(typed, stringValue(e), sent, submitted, try capture(a))
+                        } while !accepted && Date() < deadline
+                        if !accepted { throw Failure("Could not verify Return was accepted in the background. Read the window; if it was not sent, click its send button.") }
+                    }
                 }
+                // A web app's composer ignores background clicks and keys: it comes forward for the click, paste and send, then the user's app returns.
+                if box { try inFront(a, typing) } else { try typing() }
                 result = "Typed into \(quote(n.label))"
             case "type-after": result = try insertAfter(input[1],input[2],a)
             case "wait": result = try settle(a,seconds:input.count > 1 ? Double(input[1])! : 5) ? "Window settled" : "Window did not settle before the timeout"
@@ -7949,7 +8138,7 @@ enum Hands {
 // MARK: - End Hands
 
 if CommandLine.arguments == [CommandLine.arguments[0], "--raise"] || CommandLine.arguments == [CommandLine.arguments[0], "--raise", "user"] {
-    DistributedNotificationCenter.default().postNotificationName(.init("atticus.raise"), object: CommandLine.arguments.count == 3 ? "user" : nil, deliverImmediately: true); usleep(50_000); exit(0)
+    DistributedNotificationCenter.default().postNotificationName(.init("aurel.raise"), object: CommandLine.arguments.count == 3 ? "user" : nil, deliverImmediately: true); usleep(50_000); exit(0)
 }
 if CommandLine.arguments.dropFirst() == ["--calendar"] {
     let result: [String: Any]
@@ -7963,7 +8152,7 @@ if CommandLine.arguments.dropFirst() == ["--calendar"] {
 if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "--hands" { exit(Hands.cli(Array(CommandLine.arguments.dropFirst(2)))) }
 if CommandLine.arguments.dropFirst() == ["--draw-target"] {
     let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly,kCGNullWindowID) as? [[String:Any]] ?? []
-    let named = ProcessInfo.processInfo.environment["ATTICUS_SCREEN"]
+    let named = ProcessInfo.processInfo.environment["AUREL_SCREEN"]
     let screen = named.flatMap { name in NSScreen.screens.first { $0.localizedName == name } }.map {
         CGDisplayBounds($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? CGMainDisplayID())
     }
@@ -8004,7 +8193,7 @@ if CommandLine.arguments.count >= 3, ["--window-target","--target-app"].contains
     exit(0)
 }
 
-// One Atticus at a time: a lock the system drops when the process ends (opened by hand + started by launchd = two)
+// One Aurel at a time: a lock the system drops when the process ends (opened by hand + started by launchd = two)
 if CommandLine.arguments.dropFirst() == ["--selftest"] {
     precondition(transcriptKey(" Open   Notes. ") == transcriptKey("open notes"))
     precondition(transcriptKey("calculate 1.5") != transcriptKey("calculate 15"))
@@ -8035,6 +8224,18 @@ if CommandLine.arguments.dropFirst() == ["--selftest"] {
     }
     precondition(AgentRow.cost(0.0412) == "≈4.12¢ at API prices" && AgentRow.cost(0.1861) == "≈18.6¢ at API prices" && AgentRow.cost(2.5) == "≈$2.50 at API prices")
     precondition(answerMarkdown("`$5` and ```\n$PATH\n```") == "`\u{E000}5` and ```\n\u{E000}PATH\n```")
+    // The box's answers (Answer.swift): shutAnswer and parseMarkdown, and the orb (Orb.swift).
+    precondition(shutAnswer("Use **rad") == "Use " && shutAnswer("x \\(\\dfrac{4}") == "x " && shutAnswer("a\n$$\nA = ") == "a\n" && shutAnswer("Try `ls") == "Try ")
+    precondition(shutAnswer("It costs $5 and $x$ is done") == "It costs $5 and $x$ is done" && shutAnswer("```\necho $HOME") == "```\necho $HOME")
+    do {
+        let b = parseMarkdown("# Plan\n- one\n- two\n\nCosts $5, area $\\pi r^2$.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```\nls\n```")
+        let kinds = b.map { b -> String in switch b { case .heading: return "h"; case .list: return "ul"; case .para: return "p"; case .table: return "table"; case .pre: return "pre"; case .hr: return "hr"; case .math: return "math" } }
+        precondition(kinds == ["h", "ul", "p", "table", "pre"], "\(kinds)")
+        if case .para(let i) = b[2] { precondition(i.contains { if case .math(let t) = $0 { return t == "\\pi r^2" }; return false }) }
+        precondition(answerWords(parseMarkdown("**Two** words")) == ["Two", "words"])
+    }
+    precondition(capsOf("fn⌃Space") == ["fn", "⌃", "Space"] && capsOf("⌃⌥Space") == ["⌃", "⌥", "Space"] && capsOf("F5") == ["F5"])
+    precondition(orbFrame("breathing", 64, 0).dots.count == 484 && orbFrame("connecting", 64, 0).lines.count > 0)
     print("native selftest ok"); exit(0)
 }
 // The brain's typing helper shares selection validation and clipboard ownership with Replace.
@@ -8079,13 +8280,13 @@ func callAppsOnMic() -> Set<String> {   // names of call apps whose audio input 
     })
 }
 let app = App()
-Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in app.wakeTick() }
+RunLoop.main.add(Timer(timeInterval: 1, repeats: true) { _ in app.wakeTick() }, forMode: .common)   // also while the box tracks a click or its field
 let agentsUI = AgentPanels()
 let routineWake = RoutineWake()
 let onboarding = Onboarding()
 if !UserDefaults.standard.bool(forKey: "onboarded") { DispatchQueue.main.async { onboarding.open() } }
 else { Onboarding.plan { c in if c["ok"] as? Bool != true { onboarding.open(automatic: true) } } }   // set up once, but Claude signed out since
-// An idea only while the user is at the Mac and nothing else wants them: no call, sharing, full-screen app, setup, or Atticus in use.
+// An idea only while the user is at the Mac and nothing else wants them: no call, sharing, full-screen app, setup, or Aurel in use.
 let launched = Date()
 var specs = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
              EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
@@ -8111,7 +8312,7 @@ for name in [NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification,
         app.prepareForInactiveSession()
     }
 }
-func specialHotkey(_ h: (code: Int, mods: Int, flags: NSEvent.ModifierFlags)) -> Bool { h.code < 0 || h.mods & atticusFnKey != 0 }
+func specialHotkey(_ h: (code: Int, mods: Int, flags: NSEvent.ModifierFlags)) -> Bool { h.code < 0 || h.mods & aurelFnKey != 0 }
 func hotkeysConflict(_ a: (code: Int, mods: Int, flags: NSEvent.ModifierFlags), _ b: (code: Int, mods: Int, flags: NSEvent.ModifierFlags)) -> Bool {
     a.code == b.code && a.mods == b.mods ||
     a.code < 0 && a.mods & b.mods == a.mods ||
@@ -8172,7 +8373,7 @@ func refreshSpecialHotkeys() {
 }
 registerHotkey()
 registerDictateHotkey()
-// ⌃⌘V pastes the last dictation; skipped when Atticus's own shortcuts hold it or another app (Willow Voice) already does.
+// ⌃⌘V pastes the last dictation; skipped when Aurel's own shortcuts hold it or another app (Willow Voice) already does.
 var pasteRef: EventHotKeyRef?
 let pasteHotkey = (code: 9, mods: controlKey | cmdKey, flags: NSEvent.ModifierFlags([.control, .command]))
 let pasteHotkeyRegistered = !hotkeysConflict(pasteHotkey, hotkey()) && (Prefs.str("dictateHotkeyLabel").isEmpty || !hotkeysConflict(pasteHotkey, dictateHotkey())) &&
@@ -8184,13 +8385,13 @@ NSApplication.shared.delegate = delegate
 if !hotkeyRegistered || !dictateHotkeyRegistered { DispatchQueue.main.async { settings.open() } }   // another app owns a saved shortcut: show the warning, not a silent dead key
 Updater.schedule()
 
-// Test hook: `defaults write com.atticus.app demo -string "<request>"` then restart runs it once without the mic.
+// Test hook: `defaults write com.aurel.app demo -string "<request>"` then restart runs it once without the mic.
 if let demo = UserDefaults.standard.string(forKey: "demo") {
     UserDefaults.standard.removeObject(forKey: "demo")
     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { app.js("listen"); app.show(); app.js("words", demo); app.run(demo) }
 }
 
-// ⌘X/C/V/A/Z in every Atticus text field (typing box, choices, Settings): a menu-bar-less app has no Edit
+// ⌘X/C/V/A/Z in every Aurel text field (typing box, choices, Settings): a menu-bar-less app has no Edit
 // menu to route them, and a non-activating panel never gets menu shortcuts anyway, so send them down the responder chain.
 NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
     let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask), k = e.charactersIgnoringModifiers?.lowercased() ?? ""

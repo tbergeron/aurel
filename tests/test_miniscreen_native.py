@@ -1,13 +1,10 @@
-"""Mini screen tests use isolated WebKit and colored fixture windows; never the installed app."""
-import functools
-import http.server
+"""Mini screen tests use colored fixture windows; never the installed app."""
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import statistics
 import unittest
@@ -16,26 +13,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 HARNESS = r'''
 import Cocoa
-import WebKit
 import AVFoundation
 import ScreenCaptureKit
 
 enum Prefs { static func str(_ key: String) -> String { "back" } }
 __NATIVE__
 let app = NSApplication.shared; app.setActivationPolicy(.accessory)
-let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleDisplaySleepDisabled], reason: "Atticus isolated window fixtures")
+let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleDisplaySleepDisabled], reason: "Aurel isolated window fixtures")
 let mode = CommandLine.arguments[1]
 if mode == "cover" || mode == "activation" { app.setActivationPolicy(.regular) }
 if mode == "cover" {
     let cover=NSWindow(contentRect:NSRect(x:100,y:100,width:300,height:200),styleMask:[.titled],backing:.buffered,defer:false)
-    cover.title="Atticus activation cover";cover.makeKeyAndOrderFront(nil)
+    cover.title="Aurel activation cover";cover.makeKeyAndOrderFront(nil)
     MiniScreen.activate(ProcessInfo.processInfo.processIdentifier)
     print("READY");fflush(stdout);app.run()
 }
 if mode == "activation" {
     let target=NSWindow(contentRect:NSRect(x:40,y:40,width:600,height:375),styleMask:[.titled],backing:.buffered,defer:false)
     let other=NSWindow(contentRect:NSRect(x:70,y:70,width:400,height:300),styleMask:[.titled],backing:.buffered,defer:false)
-    target.title="Atticus exact activation target";other.title="Atticus other activation window"
+    target.title="Aurel exact activation target";other.title="Aurel other activation window"
     target.orderFrontRegardless();other.orderFrontRegardless()
     let mini=MiniScreen(),pid=ProcessInfo.processInfo.processIdentifier
     let f=target.frame,height=NSScreen.screens.first!.frame.height
@@ -58,22 +54,7 @@ if mode == "activation" {
 let panel = NSWindow(contentRect:NSRect(x:20,y:40,width:460,height:760),styleMask:[.borderless],backing:.buffered,defer:false)
 panel.isReleasedWhenClosed = false
 let mini = MiniScreen()
-if mode == "ui" {
-    let web = WKWebView(frame:panel.contentView!.bounds)
-    panel.contentView!.addSubview(web); panel.orderFrontRegardless()
-    web.load(URLRequest(url:URL(string:CommandLine.arguments[2])!))
-    var tries = 0
-    Timer.scheduledTimer(withTimeInterval:0.25,repeats:true) { timer in
-        tries += 1
-        web.evaluateJavaScript("document.getElementById('results')?.textContent") { result, error in
-            guard let text = result as? String else { return }
-            if text.contains("checks passed") || text.contains("✗") {
-                print(text); timer.invalidate(); exit(text.contains("✗") ? 1 : 0)
-            }
-        }
-        if tries > 120 { print("UI fixture timed out"); exit(1) }
-    }
-} else if mode == "target" {
+if mode == "target" {
     let window = NSPanel(contentRect:NSRect(x:40,y:40,width:800,height:500),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
     let strip = NSPanel(contentRect:NSRect(x:0,y:0,width:1920,height:30),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
     for p in [window,strip] {p.level = .normal;p.isReleasedWhenClosed=false;p.sharingType = .none;p.ignoresMouseEvents=true;p.alphaValue=0.01;p.orderFrontRegardless()}
@@ -143,14 +124,14 @@ app.run()
 '''
 
 
-@unittest.skipUnless(sys.platform == 'darwin', 'macOS window capture/WebKit fixture')
+@unittest.skipUnless(sys.platform == 'darwin', 'macOS window capture fixture')
 class MiniScreenNativeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(); cls.addClassCleanup(cls.temp.cleanup)
-        cls.root = Path(cls.temp.name); cls.binary = cls.root / 'Atticus'
-        cls.env = {**os.environ, 'ATTICUS_DIR':str(cls.root), 'ATTICUS_RESOURCES_DIR':str(ROOT)}
-        swift = (ROOT / 'Atticus.swift').read_text()
+        cls.root = Path(cls.temp.name); cls.binary = cls.root / 'Aurel'
+        cls.env = {**os.environ, 'AUREL_DIR':str(cls.root), 'AUREL_RESOURCES_DIR':str(ROOT)}
+        swift = (ROOT / 'Aurel.swift').read_text()
         ax = swift[swift.index('func axAttribute('):swift.index('struct TextSelection')]
         mini = swift[swift.index('final class PassView:'):swift.index('final class App:')]
         source = cls.root / 'main.swift'; source.write_text(HARNESS.replace('__NATIVE__',ax + mini))
@@ -185,7 +166,7 @@ class MiniScreenNativeTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout + result.stderr)
         print(result.stdout.strip(),flush=True)
 
-    @unittest.skipUnless(os.environ.get('ATTICUS_MINISCREEN_CPU') == '1', 'Opt-in 20 s CPU benchmark per mode')
+    @unittest.skipUnless(os.environ.get('AUREL_MINISCREEN_CPU') == '1', 'Opt-in 20 s CPU benchmark per mode')
     def test_cpu_cost(self):
         averages = {}
         for mode in ('baseline', 'cpu'):
@@ -207,18 +188,8 @@ class MiniScreenNativeTests(unittest.TestCase):
                 process.communicate(timeout=5)
         print(f'MINISCREEN CPU (20 one-second ps samples): off {averages["baseline"]:.2f}%, on {averages["cpu"]:.2f}%, extra {averages["cpu"]-averages["baseline"]:.2f} percentage points',flush=True)
 
-    def test_webkit_interactions(self):
-        handler = functools.partial(http.server.SimpleHTTPRequestHandler,directory=str(ROOT))
-        server = http.server.ThreadingHTTPServer(('127.0.0.1',0),handler)
-        thread = threading.Thread(target=server.serve_forever,daemon=True); thread.start()
-        try:
-            result = subprocess.run([str(self.binary),'ui',f'http://127.0.0.1:{server.server_port}/tests/ui.html'],env=self.env,capture_output=True,text=True,timeout=40)
-            self.assertEqual(result.returncode,0,result.stdout + result.stderr)
-            print(result.stdout.strip().splitlines()[-1],flush=True)
-        finally: server.shutdown(); server.server_close(); thread.join()
-
     def test_target_selection_and_minimized_fallback_with_fake_ax(self):
-        swift = (ROOT / 'Atticus.swift').read_text()
+        swift = (ROOT / 'Aurel.swift').read_text()
         mini = swift[swift.index('final class PassView:'):swift.index('final class App:')]
         stub = r'''
 import Cocoa
@@ -246,7 +217,7 @@ final class PanelStub { var isVisible=false }
 final class DrawingStub { var active=false,hasInput=false,clears=0;func clear() {clears += 1;active=false;hasInput=false};func stopVoice() {} }
 final class Starter {
  let drawing=DrawingStub();var drawingReply=false
- let mini=MiniScreen(),engine=EngineStub(),panel=PanelStub();var busy=false,fresh=false,retryOffer=false,askFile="",agentCard="",replyAgent="",focusFile=NSTemporaryDirectory()+"atticus-focus-fixture"
+ let mini=MiniScreen(),engine=EngineStub(),panel=PanelStub();var busy=false,fresh=false,retryOffer=false,askFile="",agentCard="",replyAgent="",focusFile=NSTemporaryDirectory()+"aurel-focus-fixture"
  func shush() {}
  func hush(keepReply:Bool) {if !keepReply {drawingReply=false}}
  func dismiss() {}

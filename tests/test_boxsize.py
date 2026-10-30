@@ -7,7 +7,7 @@ from tests import run_swift
 
 class BoxSizeTests(unittest.TestCase):
     def test_saved_width_and_frame_fit_current_screen(self):
-        source = (Path(__file__).resolve().parents[1] / 'Atticus.swift').read_text()
+        source = (Path(__file__).resolve().parents[1] / 'Aurel.swift').read_text()
         width = source[source.index('func boxWidth('):source.index('final class App:')]
         clamp = source[source.index('    static func clamp(', source.index('enum PanelFrame')):source.index('    // The same frame on another display:')]
         harness = 'import Cocoa\n' + width + '\nenum PanelFrame {\n' + clamp + '}\n' + r'''

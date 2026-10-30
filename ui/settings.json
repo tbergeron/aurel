@@ -1,0 +1,86 @@
+{
+ "switches": {
+  "dictateLive": "Type as I talk",
+  "dictateHistory": "Save dictation history",
+  "wakeWord": "Wake word: say “Aurel”",
+  "login": "Open at login",
+  "menuIcon": "Show in menu bar",
+  "speak": "Read answers aloud",
+  "draw": "Draw on screen to show you",
+  "agentUserTools": "Use my Claude Code tools",
+  "saveChats": "Save chats",
+  "learnMe": "Learn about me",
+  "safe": "Safe mode",
+  "hideWhenSharing": "Hide from screen sharing",
+  "stats": "Count me as a user",
+  "improve": "Help improve Aurel",
+  "autoUpdate": "Update automatically"
+ },
+ "picks": {
+  "dictateMode": {
+   "label": "Dictated text",
+   "options": {
+    "Verbatim": "verbatim",
+    "Clean up": "cleanup"
+   }
+  },
+  "speechModel": {
+   "label": "Speech model",
+   "options": {
+    "Speech": "speech",
+    "Dictation": "dictation",
+    "Parakeet": "parakeet"
+   }
+  },
+  "input": {
+   "label": "Shortcut opens",
+   "options": {
+    "Voice": "voice",
+    "Typing": "type"
+   }
+  },
+  "showAnswers": {
+   "label": "Show answers",
+   "options": {
+    "As they arrive": "stream",
+    "All at once": "once"
+   }
+  },
+  "client": {
+   "label": "AI client",
+   "options": {
+    "Local": "local",
+    "Claude": "claude"
+   }
+  },
+  "bigAsks": {
+   "label": "Bigger asks",
+   "options": {
+    "Local": "local",
+    "Claude": "claude"
+   }
+  },
+  "routing": {
+   "label": "Intelligence",
+   "options": {
+    "Cheapest": "cheapest",
+    "Balanced": "balanced",
+    "Most capable": "capable"
+   }
+  },
+  "model": {
+   "label": "Work model",
+   "options": {
+    "Sonnet": "sonnet",
+    "Opus": "opus"
+   }
+  },
+  "screen": {
+   "label": "Look at my screen",
+   "options": {
+    "Automatic": "auto",
+    "Never": "never"
+   }
+  }
+ }
+}

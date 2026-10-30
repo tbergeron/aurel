@@ -5,13 +5,13 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
-import subprocess
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-import atticus
+import aurel
+from tests import native_ui
+from tests.test_box_native import PRELUDE
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSWER = ('Paris is the capital of France. It sits on the Seine in the north of the country, and about two million people '
@@ -51,35 +51,35 @@ def result(tool_id, content='Observed state'):
 class StreamTests(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.TemporaryDirectory(); self.addCleanup(self.root.cleanup)
-        patcher = patch.multiple(atticus, DIR=self.root.name, HOME=self.root.name, PREFS=str(Path(self.root.name) / 'settings.json'))
+        patcher = patch.multiple(aurel, DIR=self.root.name, HOME=self.root.name, PREFS=str(Path(self.root.name) / 'settings.json'))
         patcher.start(); self.addCleanup(patcher.stop)
 
     def run_stream(self, rows, final, env=None, ask=''):
         p = Mock(); p.stdin = io.StringIO(); p.ask = ask; p.returncode = 0
         p.stdout = map(json.dumps, rows + [{'type': 'result', 'result': final, 'total_cost_usd': .001}])
-        with patch.dict(os.environ, {'ATTICUS_UI': '1', 'ATTICUS_COMMIT': '', **(env or {})}), patch.object(atticus.threading, 'Thread'), \
-             patch.object(atticus.threading, 'Timer'), patch.object(atticus, 'preview_commands'), contextlib.redirect_stdout(io.StringIO()) as out:
-            reply, _, _ = atticus.run('Request: fixture', p)
+        with patch.dict(os.environ, {'AUREL_UI': '1', 'AUREL_COMMIT': '', **(env or {})}), patch.object(aurel.threading, 'Thread'), \
+             patch.object(aurel.threading, 'Timer'), patch.object(aurel, 'preview_commands'), contextlib.redirect_stdout(io.StringIO()) as out:
+            reply, _, _ = aurel.run('Request: fixture', p)
         lines = out.getvalue().rstrip('\n').split('\n')   # not splitlines(): an answer's own line breaks travel as U+2028
         return reply, lines, [line[2:] for line in lines if line.startswith('… ')]
 
     def test_streamed_answer_never_shows_tags_drafts_handoffs_or_sources(self):
         long = ANSWER + ' '
-        self.assertEqual(atticus.streamed_answer(long), ANSWER)
-        self.assertEqual(atticus.streamed_answer(ANSWER[:100]), '')   # could still be a 3-8 word note
+        self.assertEqual(aurel.streamed_answer(long), ANSWER)
+        self.assertEqual(aurel.streamed_answer(ANSWER[:100]), '')   # could still be a 3-8 word note
         for held in ('[draft] ' + long, '[insert] ' + long, '[replace] ' + long, '  \n[agent {\n  "title": "x",\n' + long,
                      '```json\n[agent ' + long, '[sonnet]', '[steer {"id":"a","text":"' + long, '[agent-profile {' + long):
-            self.assertEqual(atticus.streamed_answer(held), '', held)
+            self.assertEqual(aurel.streamed_answer(held), '', held)
         for tag in ('[tip Say "remember: x"]', '[point 1 20 30]', '[workflow x | y]', '[replay open -a Notes]', '[done]',
                     '[agent {"title":"x","brief":"y"}]', '[agent-result {}]', '[steer {"id":"a"}]'):
-            self.assertEqual(atticus.streamed_answer(long + tag + ' after the tag'), ANSWER, tag)
-        self.assertEqual(atticus.streamed_answer(long + '\nSources: https://x.example'), ANSWER)
-        self.assertEqual(atticus.streamed_answer(long + '\nSour'), ANSWER)   # may still become "Sources:"
-        self.assertEqual(atticus.streamed_answer(ANSWER + '\n- More'), ANSWER + '\n- More')
+            self.assertEqual(aurel.streamed_answer(long + tag + ' after the tag'), ANSWER, tag)
+        self.assertEqual(aurel.streamed_answer(long + '\nSources: https://x.example'), ANSWER)
+        self.assertEqual(aurel.streamed_answer(long + '\nSour'), ANSWER)   # may still become "Sources:"
+        self.assertEqual(aurel.streamed_answer(ANSWER + '\n- More'), ANSWER + '\n- More')
         for text in ('See [1], [ ] and a[0].', 'See [the guide](https://x.example) and [Apple](https://apple.example).'):
-            self.assertEqual(atticus.streamed_answer(long + text), long + text)   # not a tag: the rest keeps streaming
-        self.assertEqual(atticus.streamed_answer(long + 'See [the guide'), long + 'See')   # may still be a tag until it closes as a link
-        self.assertEqual(atticus.streamed_answer(long + '[agent {"brief":"read [x](y)"}] after'), ANSWER)
+            self.assertEqual(aurel.streamed_answer(long + text), long + text)   # not a tag: the rest keeps streaming
+        self.assertEqual(aurel.streamed_answer(long + 'See [the guide'), long + 'See')   # may still be a tag until it closes as a link
+        self.assertEqual(aurel.streamed_answer(long + '[agent {"brief":"read [x](y)"}] after'), ANSWER)
 
     def test_plain_answer_streams_and_the_final_reply_replaces_it(self):
         reply, lines, shown = self.run_stream(message(ANSWER), ANSWER)
@@ -92,11 +92,11 @@ class StreamTests(unittest.TestCase):
     def test_multi_line_agent_handoff_never_prints_text_and_hands_off(self):
         marker = '[agent ' + json.dumps({'title': 'Research desks', 'brief': 'Compare standing desks under $600 across sources', 'context': ANSWER}, indent=2) + ']'
         ask = tempfile.mkdtemp(dir=self.root.name)
-        with patch.object(atticus, 'wait_commit', return_value=True):
+        with patch.object(aurel, 'wait_commit', return_value=True):
             reply, lines, shown = self.run_stream(message(marker + '\n' + ANSWER), marker + '\n' + ANSWER, ask=ask)
         self.assertEqual(reply, ''); self.assertEqual(shown, [])
         self.assertEqual(sum(line.startswith('⤴ ') for line in lines), 1)
-        self.assertEqual(atticus.run.handoff['title'], 'Research desks')
+        self.assertEqual(aurel.run.handoff['title'], 'Research desks')
         self.assertFalse(any(line.startswith(('✓', '·')) for line in lines))
 
     def test_note_before_a_tool_never_shows_as_the_answer(self):
@@ -126,22 +126,22 @@ class StreamTests(unittest.TestCase):
 
     def test_nothing_streams_before_the_transcript_is_confirmed_or_outside_the_box(self):
         commit = Path(self.root.name) / 'commit'
-        _, _, shown = self.run_stream(message(ANSWER), ANSWER, env={'ATTICUS_COMMIT': str(commit)})
+        _, _, shown = self.run_stream(message(ANSWER), ANSWER, env={'AUREL_COMMIT': str(commit)})
         self.assertEqual(shown, [])
         commit.write_text('go')
-        _, _, shown = self.run_stream(message(ANSWER), ANSWER, env={'ATTICUS_COMMIT': str(commit)})
+        _, _, shown = self.run_stream(message(ANSWER), ANSWER, env={'AUREL_COMMIT': str(commit)})
         self.assertEqual(shown[-1], ANSWER)
-        _, _, shown = self.run_stream(message(ANSWER), ANSWER, env={'ATTICUS_UI': ''})
+        _, _, shown = self.run_stream(message(ANSWER), ANSWER, env={'AUREL_UI': ''})
         self.assertEqual(shown, [])
 
-    def failed_early_start(self, commit, getppid=os.getppid, sleep=atticus.time.sleep):
+    def failed_early_start(self, commit, getppid=os.getppid, sleep=aurel.time.sleep):
         p = Mock(); p.stdin = io.StringIO(); p.ask = ''; p.returncode = 0; p.errors = io.StringIO()
         p.stdout = map(json.dumps, [{'type': 'result', 'is_error': True, 'result': 'API Error: fixture', 'total_cost_usd': 0,
                                      'usage': {'input_tokens': 0, 'output_tokens': 0}, 'modelUsage': {}}])   # ended before any model call
-        with patch.dict(os.environ, {'ATTICUS_UI': '1', 'ATTICUS_COMMIT': str(commit)}), patch.object(atticus.threading, 'Thread'), \
-             patch.object(atticus.threading, 'Timer'), patch.object(atticus.os, 'getppid', getppid), \
-             patch.object(atticus.time, 'sleep', sleep), contextlib.redirect_stdout(io.StringIO()) as out:
-            reply, _, _ = atticus.run('Request: fixture', p)
+        with patch.dict(os.environ, {'AUREL_UI': '1', 'AUREL_COMMIT': str(commit)}), patch.object(aurel.threading, 'Thread'), \
+             patch.object(aurel.threading, 'Timer'), patch.object(aurel.os, 'getppid', getppid), \
+             patch.object(aurel.time, 'sleep', sleep), contextlib.redirect_stdout(io.StringIO()) as out:
+            reply, _, _ = aurel.run('Request: fixture', p)
         return reply, out.getvalue().splitlines()
 
     def test_a_failed_early_start_opens_setup_only_after_the_transcript_is_confirmed(self):
@@ -151,8 +151,8 @@ class StreamTests(unittest.TestCase):
         self.assertNotIn('! setup', lines)
         _, lines = self.failed_early_start(commit, sleep=lambda _: commit.write_text('go'))   # the user lets go and these words are confirmed
         self.assertEqual(lines.count('! setup'), 1)
-        with patch.dict(os.environ, {'ATTICUS_COMMIT': ''}), contextlib.redirect_stdout(io.StringIO()) as out:
-            atticus.say('!', 'setup')   # typed asks have no transcript to wait for
+        with patch.dict(os.environ, {'AUREL_COMMIT': ''}), contextlib.redirect_stdout(io.StringIO()) as out:
+            aurel.say('!', 'setup')   # typed asks have no transcript to wait for
         self.assertEqual(out.getvalue(), '! setup\n')
 
     def test_show_answers_setting_streams_as_they_arrive_or_shows_all_at_once(self):
@@ -160,148 +160,141 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(shown[-1], ANSWER)   # default: as they arrive
         for value, streams in (('stream', True), ('once', False)):
             with self.subTest(value=value):
-                Path(atticus.PREFS).write_text(json.dumps({'showAnswers': value}))
+                Path(aurel.PREFS).write_text(json.dumps({'showAnswers': value}))
                 reply, _, shown = self.run_stream(message(ANSWER), ANSWER)
                 self.assertEqual(bool(shown), streams); self.assertEqual(reply, ANSWER)   # all at once: only the final reply, with its classic fade
-        self.assertEqual(atticus.picks()['showAnswers'], ('Show answers', {'As they arrive': 'stream', 'All at once': 'once'}))
-        self.assertIn('"showAnswers": "stream"', (ROOT / 'Atticus.swift').read_text())
+        self.assertEqual(aurel.picks()['showAnswers'], ('Show answers', {'As they arrive': 'stream', 'All at once': 'once'}))
+        self.assertIn('"showAnswers": "stream"', (ROOT / 'Aurel.swift').read_text())
 
     def test_drawing_or_pointing_replies_do_not_stream(self):
-        rows = message('Drawing it', ('d1', f'{atticus.ME} --draw \'{{"steps":[]}}\'')) + [result('d1', 'Guide shown (step 1 of 1).')] + message(ANSWER)
+        rows = message('Drawing it', ('d1', f'{aurel.ME} --draw \'{{"steps":[]}}\'')) + [result('d1', 'Guide shown (step 1 of 1).')] + message(ANSWER)
         _, _, shown = self.run_stream(rows, ANSWER)
         self.assertEqual(shown, [])
 
     def test_main_asks_request_partial_messages_and_stay_strict(self):
-        with patch.object(atticus.shutil, 'which', return_value='/fixture/claude'), patch.object(atticus.subprocess, 'Popen') as popen, \
-             patch.object(atticus.atexit, 'register'), patch.object(atticus.signal, 'signal'):
-            atticus.start_claude().errors.close()
+        with patch.object(aurel.shutil, 'which', return_value='/fixture/claude'), patch.object(aurel.subprocess, 'Popen') as popen, \
+             patch.object(aurel.atexit, 'register'), patch.object(aurel.signal, 'signal'):
+            aurel.start_claude().errors.close()
         args = popen.call_args.args[0]
         for flag in ('--include-partial-messages', '--no-session-persistence', '--strict-mcp-config'): self.assertIn(flag, args)
 
-    def box(self, checks):
-        """Runs the page's real line()/markdown()/reveal() on a tiny fake DOM and clock; the answer starts 100px into a 420px-tall thread."""
-        page = (ROOT / 'ui' / 'ui.html').read_text()
-        unstream = re.search(r'  const unstream = .*\n', page).group(0)
-        shared = (ROOT / 'ui' / 'orbs.js').read_text()
-        reveal = shared[shared.index('// TeX → MathML'):shared.index('export { MML')] + page[page.index('  const leaf = c =>'):page.index('  let mini = null')]
-        line = page[page.index('    line(l) {'):page.index('    msg(s) {')]
-        script = r'''
-class C{constructor(n){this.n=n}has(){return this.n.className.split(' ').filter(Boolean)}contains(c){return this.has().includes(c)}
-  add(c){if(!this.contains(c))this.n.className=[...this.has(),c].join(' ')}remove(...c){this.n.className=this.has().filter(x=>!c.includes(x)).join(' ')}}
-class N{constructor(name,type=1,ns){this.nodeName=name;this.nodeType=type;this.namespaceURI=ns;this.childNodes=[];this.childNodes.at=undefined;this.parentNode=null;this.className='';this.style={};this.dataset={};this.classList=new C(this)}
-  append(...k){for(let c of k){if(typeof c==='string')c=new T(c);if(c.nodeName==='#frag'){this.append(...c.childNodes);continue}c.remove();c.parentNode=this;this.childNodes.push(c)}}
-  appendChild(c){this.append(c);return c}setAttribute(k,v){this[k]=v}
-  get lastChild(){return this.childNodes[this.childNodes.length-1]||null}
-  remove(){const p=this.parentNode;if(p){p.childNodes.splice(p.childNodes.indexOf(this),1);this.parentNode=null}}
-  replaceWith(...k){const p=this.parentNode,i=p.childNodes.indexOf(this);this.remove();k=k.map(c=>typeof c==='string'?new T(c):c);k.forEach(c=>{c.remove();c.parentNode=p});p.childNodes.splice(i,0,...k)}
-  replaceChildren(...k){[...this.childNodes].forEach(c=>c.remove());this.append(...k)}
-  contains(n){for(;n;n=n.parentNode)if(n===this)return true;return false}
-  get textContent(){return this.childNodes.map(c=>c.textContent).join('')}set textContent(v){this.replaceChildren(v)}
-  words(){return this.childNodes.flatMap(c=>c.nodeName==='SPAN'?[c]:c.words?c.words():[])}}
-class T extends N{constructor(d){super('#text',3);this.data=d;this.className=undefined}get textContent(){return this.data}words(){return []}}
-const document={createElement:t=>new N(t.toUpperCase()),createElementNS:(ns,t)=>new N(t,1,ns),createDocumentFragment:()=>new N('#frag'),querySelectorAll:()=>[]};
-let now=0;const performance={now:()=>now};
-const a=new N('DIV');a.className='a';a.getBoundingClientRect=()=>({top:116-thread.scrollTop});
-const thread={scrollTop:0,clientHeight:420,get scrollHeight(){return 120+a.words().length*40},getBoundingClientRect:()=>({top:0}),querySelectorAll:s=>s==='.a.streaming'&&a.classList.contains('streaming')?[a]:[]};
-const $=()=>thread,part=c=>c==='a'?a:null,status=()=>{},settle=()=>{},setState=()=>{},miniFinish=()=>{},clockStop=()=>{},clockBegin=()=>{},turn=()=>null;
-let folded=false,atBottom=true,clock=null,working=true;const fit=(follow=true)=>{if(follow&&atBottom)thread.scrollTop=thread.scrollHeight};
-''' + unstream + reveal + 'const ui={' + line + r'''};
-const words=()=>a.words().map(w=>w.textContent).join(' '),check=(ok,name)=>{if(!ok){console.error(name,'|',words(),'|',a.className,thread.scrollTop);process.exit(1)}};
-''' + checks
-        result = subprocess.run(['node', '-'], input=script, capture_output=True, text=True)   # stdin: Linux caps one argument at 128 KB
-        self.assertEqual(result.returncode, 0, result.stderr)
+    def box(self, checks, *args, **kw):
+        """Runs the native box's real line()/parseMarkdown()/Reveal on BoxModel, a turn listening and thinking."""
+        return native_ui(self, PRELUDE + 'ui("listen"); ui("words", "Request"); ui("think")\n' + checks, *args, **kw)
 
-    @unittest.skipUnless(shutil.which('node'), 'Node runs the box handler')
+    def lines(self, text):
+        """What the box gets for a streamed `text`: each … line, then the final ✓ reply (Swift unfolds its lines)."""
+        _, _, shown = self.run_stream(message(text), text)
+        with contextlib.redirect_stdout(io.StringIO()) as out: aurel.say('✓', text)
+        path = Path(self.root.name) / 'lines.json'
+        path.write_text(json.dumps(['… ' + s for s in shown] + [out.getvalue().strip().replace(' ', '\n')]))
+        return str(path)
+
     def test_box_shows_the_answer_so_far_and_replaces_or_clears_it(self):
-        page = (ROOT / 'ui' / 'ui.html').read_text()
-        self.box(r'''
-ui.line('… First words here');check(words()==='First words'&&a.classList.contains('streaming'),'shows the answer so far, its last word may still be arriving');
-ui.line('… First words\u2028- a list item');check(a.childNodes.map(c=>c.nodeName).join()==='P,UL'&&words()==='First words a list','keeps its line breaks');
-ui.line('· Checking the weather');check(a.textContent===''&&!a.classList.contains('streaming'),'a note clears it');
-ui.line('… Again and');ui.line('… ');check(a.textContent==='','an empty line clears it');
-for(const open of ['… It **moves heat from','… It `comp and so','… It [the link](https://x.co']){ui.line(open);check(a.textContent.trim()==='It','an open '+open.split(' ')[2][0]+' waits, never shown as a symbol');}
-ui.line('… It **moves heat** via `gas` and [a link](https://x.co) then');check(words()==='It moves heat via gas and a link'&&!a.textContent.includes('*'),'closed marks show as bold, code and a link');
-ui.line('… See [1] and a[0]\u2028- [ ] a task and');check(words()==='See [1] and a[0] [ ] a task','a bracket that is not a link shows at once');
-ui.line('… ```\u2028x = a[0] and');check(a.textContent.includes('a[0]'),'inside a code block a bracket is text');
-ui.line('… ');
-ui.line('… Final answer');ui.line('✓ Final answer');check(words()==='Final answer'&&!a.classList.contains('streaming')&&a.dataset.answer==='Final answer','the final reply replaces it');
-ui.line('… Late words');check(words()==='Final answer','a finished answer stays');
-a.dataset={};a.replaceChildren();ui.line('✓ Fresh reply');check(a.words().length===2&&a.words().every(w=>w.className==='w'&&w.style.animationDelay),'an answer that did not stream still fades in');
-''')
-        self.assertIn('.a .w { display: inline-block; animation: word', page)   # the streamed words reuse the answer's fade (Reduce Motion turns it off)
-        for call in ('    finished() { clockStop(); miniFinish(false); unstream(); },', "unpin(); unstream();", ".forEach(e => e.remove()); unstream();"):
-            self.assertIn(call, page)   # a hand-off, an ask card or a choices card never leaves the provisional text
+        self.box(r"""
+line("… First words here"); precondition(shown == "First words" && turn.aKind == "streaming", "shows the answer so far, its last word may still be arriving: \(shown)")
+line("… First words\u{2028}- a list item"); precondition(turn.aBlocks.map(kind) == ["p", "ul"] && shown == "First words a list", "keeps its line breaks")
+line("· Checking the weather"); precondition(turn.aBlocks.isEmpty && turn.aText.isEmpty && turn.aKind != "streaming", "a note clears it")
+line("… Again and"); line("… "); precondition(turn.aBlocks.isEmpty, "an empty line clears it")
+for open in ["… It **moves heat from", "… It `comp and so", "… It [the link](https://x.co"] { line(open); precondition(shown == "It", "an open mark waits, never shown as a symbol: \(open) → \(shown)") }
+line("… It **moves heat** via `gas` and [a link](https://x.co) then")
+precondition(words(render(turn.aBlocks, true)) == "It **moves heat** via `gas` and [a link](https://x.co)", "closed marks show as bold, code and a link: \(render(turn.aBlocks, true))")
+line("… See [1] and a[0]\u{2028}- [ ] a task and"); precondition(shown == "See [1] and a[0] [ ] a task", "a bracket that is not a link shows at once: \(shown)")
+line("… ```\u{2028}x = a[0] and"); precondition(shown.contains("a[0]"), "inside a code block a bracket is text")
+line("… ")
+line("… Final answer"); line("✓ Final answer"); precondition(shown == "Final answer" && turn.aKind == "normal" && turn.aAnswer == "Final answer", "the final reply replaces it")
+line("… Late words"); precondition(shown == "Final answer", "a finished answer stays")
+ui("listen"); ui("think"); line("✓ Fresh reply"); precondition(turn.reveal.words.count == 2 && turn.reveal.at.count == 2 && !turn.reveal.done, "an answer that did not stream still fades in")
+// a hand-off, an ask card or a choices card never leaves the provisional text
+let calls: [(String, Any)] = [("finished", NSNull()), ("ask", ["Allow?", "echo x"]), ("pick", ["q": "Which?", "options": [["label": "A"]]])]
+for (call, arg) in calls {
+    ui("listen"); ui("think"); line("… Some words so far and"); ui(call, arg)
+    precondition(turn.aBlocks.isEmpty && turn.aKind != "streaming", "\(call) clears the streamed text")
+}
+""")
+        # the streamed words reuse the answer's fade, and Reduce Motion turns it off
+        self.assertIn('let still = reveal == nil || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion', (ROOT / 'Answer.swift').read_text())
 
-    @unittest.skipUnless(shutil.which('node'), 'Node runs the box handler')
     def test_streamed_words_fade_in_once_and_the_box_keeps_the_answers_start_in_view(self):
-        self.box(r'''
-const long=n=>Array.from({length:n},(_,i)=>'w'+i).join(' ');
-ui.line('… '+long(6));const first=a.words(),delays=first.map(w=>w.style.animationDelay);
-check(first.length===5&&first.every(w=>w.className==='w')&&delays[0]==='0ms','the first words fade in');
-check(thread.scrollTop===0&&atBottom,'a short answer: nothing to scroll');
-now=1000;ui.line('… '+long(20));const next=a.words();
-check(first.every((w,i)=>next[i]===w&&w.style.animationDelay===delays[i]),'words on screen keep their nodes and are not animated again');
-check(next.length===19&&next[5].style.animationDelay==='0ms'&&next.slice(5).every(w=>w.className==='w'),'only the new words fade in');
-check(thread.scrollTop===100&&!atBottom,'a full box stops at the start of the answer, not the bottom');
-ui.line('… '+long(30));check(thread.scrollTop===100,'it stays at the start while more arrives');
-thread.scrollTop=700;atBottom=true;ui.line('… '+long(40));check(thread.scrollTop===700,'the user scrolled down: never yanked back up');
-thread.scrollTop=40;atBottom=false;ui.line('… '+long(45));check(thread.scrollTop===40,'the user scrolled up: stays there');
-const shown=a.words();now=9000;ui.line('✓ '+long(45)+' end.');const done=a.words();
-check(shown.every((w,i)=>done[i]===w&&w.style.animationDelay===shown[i].style.animationDelay),'the final reply never re-fades words already shown');
-check(done.length===46&&done.slice(44).map(w=>w.textContent).join()==='w44,end.'&&done[44].style.animationDelay==='0ms','only its words not yet shown fade in');
-check(thread.scrollTop===40,'the final reply does not jump to the bottom');
-''')
+        self.box(r"""
+func long(_ n: Int) -> String { (0..<n).map { "w\($0)" }.joined(separator: " ") }
+let a = m.answerID(m.turns.count - 1)!
+scrolls = []; var t0 = CACurrentMediaTime(); line("… " + long(6)); let first = turn.reveal.at
+precondition(turn.reveal.words == (0..<5).map { "w\($0)" } && first[0] >= t0 && first[0] <= CACurrentMediaTime(), "the first words fade in, the first at once")
+precondition(scrolls.count == 1 && scrolls[0].0 == a && scrolls[0].1, "following: the box keeps the answer's start in view, not the bottom")
+Thread.sleep(forTimeInterval: 0.3); t0 = CACurrentMediaTime(); line("… " + long(20)); let next = turn.reveal.at
+precondition(Array(next.prefix(5)) == first, "words on screen keep their moment and are not animated again")
+precondition(next.count == 19 && next[5] >= t0, "only the new words fade in, the first of them at once")
+precondition(scrolls.count == 2 && scrolls[1].0 == a && scrolls[1].1, "it stays at the start while more arrives")
+m.atBottom = false; scrolls = []; line("… " + long(45)); precondition(scrolls.isEmpty, "the user scrolled away: stays there")
+let shownAt = turn.reveal.at; Thread.sleep(forTimeInterval: 0.3); t0 = CACurrentMediaTime(); line("✓ " + long(45) + " end."); let done = turn.reveal.at
+precondition(Array(done.prefix(44)) == shownAt, "the final reply never re-fades words already shown")
+precondition(done.count == 46 && Array(turn.reveal.words.suffix(2)) == ["w44", "end."] && done[44] >= t0, "only its words not yet shown fade in")
+precondition(scrolls.isEmpty, "the final reply does not jump")
+""")
+        # The page let a full box stop at the answer's start (atBottom = start >= end) and the user's own wheel clear atBottom,
+        # so later lines never pulled a reader up or down. Natively something must clear it the same way.
+        self.assertTrue(re.search(r'atBottom\s*=(?!=)(?!\s*true\b)', (ROOT / 'Box.swift').read_text()), 'nothing ever clears BoxModel.atBottom')
 
-    @unittest.skipUnless(shutil.which('node'), 'Node runs the box handler')
     def test_a_long_streamed_answer_fades_in_reading_order_once(self):
-        _, _, shown = self.run_stream(message(FRIDGE), FRIDGE)
-        with contextlib.redirect_stdout(io.StringIO()) as out: atticus.say('✓', FRIDGE)
-        lines = ['… ' + s for s in shown] + [out.getvalue().strip().replace('\u2028', '\n')]   # Swift unfolds the final reply's lines
-        self.assertGreater(len(lines), 100)
-        self.box('const lines=' + json.dumps(lines) + r''';
-const seen=new Set(),starts=[];
-lines.forEach((l,k)=>{now=k*25;ui.line(l);a.words().forEach((w,i)=>{if(seen.has(w))return;seen.add(w);
-  check(w.className==='w'&&w.style.animationDelay,'no word appears without its fade: '+w.textContent);
-  (starts[i]||=[]).push(Math.round(now+parseFloat(w.style.animationDelay)))})});
-check(a.words().length===starts.length&&!a.classList.contains('streaming'),'the final reply is all there');
-starts.forEach((s,i)=>{check(new Set(s).size===1,'a word re-rendered with the same text never fades again: '+a.words()[i].textContent+' '+s);
-  check(!i||s[0]>=starts[i-1][0],'words fade in reading order: '+a.words()[i].textContent+' '+s+' after '+starts[i-1])});
-check(Math.max(...starts.flat())-now<=900,'a long backlog catches up instead of lagging');
-''')
+        path = self.lines(FRIDGE)
+        self.box(r"""
+let lines = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))) as! [String]
+precondition(lines.count > 100)
+var first: [Double] = [], last = 0.0
+for l in lines {
+    last = CACurrentMediaTime(); line(l); Thread.sleep(forTimeInterval: 0.01)
+    let r = turn.reveal
+    precondition(r.at.count == r.words.count && r.words == answerWords(turn.aBlocks), "no word appears without its fade")
+    for (i, t) in r.at.enumerated() {
+        if i < first.count { precondition(t == first[i], "a word re-rendered with the same text never fades again: \(r.words[i])") } else { first.append(t) }
+    }
+}
+precondition(turn.aKind == "normal" && turn.reveal.words == answerWords(parseMarkdown(String(lines.last!.dropFirst(2)))), "the final reply is all there")
+precondition(zip(first, first.dropFirst()).allSatisfy { $0 <= $1 }, "words fade in reading order")
+precondition(first.max()! - last <= 0.9 + 1e-6, "a long backlog catches up instead of lagging")
+""", path, timeout=60)
 
     def test_closed_output_pipe_cancels_without_a_traceback(self):
         with patch('builtins.print', side_effect=BrokenPipeError), patch('sys.stdout', io.StringIO()), \
-             patch.object(atticus, 'stop_workers', side_effect=SystemExit(0)) as stop:
+             patch.object(aurel, 'stop_workers', side_effect=SystemExit(0)) as stop:
             with self.assertRaises(SystemExit) as ended:
-                atticus.say('✓', 'Finished.')
-            atticus.sys.stdout.close()
+                aurel.say('✓', 'Finished.')
+            aurel.sys.stdout.close()
         self.assertEqual(ended.exception.code, 0)
         stop.assert_called_once_with()
 
-    @unittest.skipUnless(shutil.which('node'), 'Node runs the box handler')
     def test_a_streamed_blocks_marker_background_or_border_never_shows_before_its_first_word(self):
         text = ("A fridge pumps heat out of the cabinet. Its work per cycle is $$W = Q_h - Q_c$$ and the main parts are:\n\n## Parts\n\n"
                 "- **Compressor:** squeezes the vapor so it gets hot.\n- **Condenser:** gives that heat to the room, check it with `fridge --status` daily.\n\n"
                 "1. Compression raises the pressure.\n2. Expansion drops it again.\n\n```\nstate: cooling\nfan: on\n```\n\n"
                 "| Part | Where |\n|---|---|\n| Coils | Back |\n| Fan | Inside |\n")
-        _, _, shown = self.run_stream(message(text), text)
-        with contextlib.redirect_stdout(io.StringIO()) as out: atticus.say('✓', text)
-        lines = ['… ' + s for s in shown] + [out.getvalue().strip().replace('\u2028', '\n')]
-        self.box('const lines=' + json.dumps(lines) + r''';
-const unit=c=>c.className==='w'||c.namespaceURI||/\btex\b/.test(c.className);
-const units=n=>n.childNodes.flatMap(c=>c.nodeType!==1?[]:unit(c)?[c]:units(c)),boxes=n=>n.childNodes.flatMap(c=>c.nodeType!==1||unit(c)?[]:[c,...boxes(c)]);
-const start=new Map(),seen=new Set();
-lines.forEach((l,k)=>{now=k*25;ui.line(l);
-  units(a).forEach(u=>start.has(u)||start.set(u,now+parseFloat(u.style.animationDelay||0)));
-  boxes(a).forEach(b=>{if(seen.has(b))return;seen.add(b);const us=units(b);
-    check(us.length||b.nodeName==='BR','a list item, heading or code block shows only once it has a word: '+b.nodeName);
-    if(/^(LI|PRE|CODE|TH|TD)$/.test(b.nodeName))check(b.style.animationDelay&&now+parseFloat(b.style.animationDelay)>=Math.min(...us.map(u=>start.get(u)))-1,
-      'its marker, number, background or border fades in with its first word, never before: '+b.nodeName+' '+us[0].textContent)})});
-const all=boxes(a).map(b=>b.nodeName+'.'+b.className).join();
-check(['UL.','OL.','DIV.h','PRE.','CODE.','TD.'].every(b=>all.includes(b))&&units(a).some(u=>u.namespaceURI),'every kind of block was there: '+all);
-''')
-        self.assertIn('.turn > .a :is(li, pre, code, th, td) { animation: word .5s var(--ease) both; }', (ROOT / 'ui' / 'ui.html').read_text())   # the word fade; Reduce Motion turns it off
-
+        self.box(r"""
+let lines = try! JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))) as! [String]
+func has(_ i: [Inline]) -> Bool { !words(render(i, false)).isEmpty }
+var empty = Set<String>()
+for l in lines {
+    line(l)
+    for b in turn.aBlocks {   // a list item, heading, code block or table cell shows only once it has a word
+        switch b {
+        case .heading(let i): if !has(i) { empty.insert("a heading") }
+        case .list(_, _, let items): if !items.allSatisfy(has) { empty.insert("a list item (its marker)") }
+        case .pre(let s): if words(s).isEmpty { empty.insert("a code block (its background)") }
+        case .table(let h, let rows): if !([h] + rows).allSatisfy({ $0.allSatisfy(has) }) { empty.insert("a table cell (its border)") }
+        default: break
+        }
+    }
+}
+let all = Set(turn.aBlocks.map(kind))
+precondition(["ul", "ol", "h", "pre", "table", "math"].allSatisfy(all.contains) && render(turn.aBlocks, true).contains("`fridge --status`"), "every kind of block was there: \(all)")
+precondition(empty.isEmpty, "shown before its first word: \(empty.sorted())")
+""", self.lines(text))
+        # Each block's marker, background or border fades with its first word (fade(first)); Reduce Motion stills them (AnswerView).
+        answer = (ROOT / 'Answer.swift').read_text()
+        self.assertIn('.opacity(fade(rows[k].1))', answer)   # a list marker
+        self.assertIn('.background(rr(10).fill(Color.white(0.07))).opacity(fade(f))', answer)   # a code block's background
+        cell = answer[answer.index('    func cell('):answer.index('    func upper(')]
+        self.assertIn('fade(', cell, "a table cell's border fades with its first word")
 
 if __name__ == '__main__':
     unittest.main()

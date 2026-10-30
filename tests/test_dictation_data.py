@@ -1,18 +1,16 @@
 """Local dictation storage and conservative corrections; no UI, mic, apps or model calls."""
 from pathlib import Path
-import shutil
-import subprocess
 import unittest
 from unittest.mock import patch
 
-from tests import run_swift
+from tests import native_ui, run_swift
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class DictationDataTests(unittest.TestCase):
     def test_private_bounded_history_stats_and_dictionary(self):
-        source = (ROOT / 'Atticus.swift').read_text()
+        source = (ROOT / 'Aurel.swift').read_text()
         store = source[source.index('enum DictationData {'):source.index('enum Prefs {')]
         swift = r'''import AppKit
 struct Prefs {
@@ -25,7 +23,7 @@ struct Prefs {
 defer { try? FileManager.default.removeItem(atPath: (Prefs.path as NSString).deletingLastPathComponent) }
 precondition(DictationData.word("Saarth"))
 precondition(DictationData.word("Saarth") && DictationData.words == ["Saarth"])
-precondition(DictationData.word("Atticus", replacing: "Saarth") && DictationData.words == ["Atticus"])
+precondition(DictationData.word("Aurel", replacing: "Saarth") && DictationData.words == ["Aurel"])
 precondition(!DictationData.word("\n") && !DictationData.word("bad\nword") && !DictationData.word(String(repeating:"a", count:81)))
 precondition(DictationData.record("Three final words", raw: "um Three final words", app: "Example", seconds: 1))
 let row = DictationData.archive.history[0]
@@ -62,11 +60,11 @@ print("private dictation data ok")
         self.assertIn('private dictation data ok', run_swift(self, swift))
 
     def test_corrections_are_single_words_and_reject_rewrites(self):
-        source = (ROOT / 'Atticus.swift').read_text()
+        source = (ROOT / 'Aurel.swift').read_text()
         store = source[source.index('enum DictationData {'):source.index('enum Prefs {')]
         swift = r'''import AppKit
 struct Prefs {
-    static var path = "/tmp/unused-atticus-dictation-test/settings.json"
+    static var path = "/tmp/unused-aurel-dictation-test/settings.json"
     static var d: [String: Any] = [:]
     static func bool(_ k: String) -> Bool { false }
     static func set(_ k: String, _ v: Any) -> Bool { true }
@@ -74,7 +72,7 @@ struct Prefs {
 ''' + store + r'''
 let saarth = DictationData.correction("Hello Sarth.", "Hello Saarth.")
 precondition(saarth?.heard == "Sarth" && saarth?.word == "Saarth")
-precondition(DictationData.correction("open atticus", "open Atticus")?.word == "Atticus")
+precondition(DictationData.correction("open aurel", "open Aurel")?.word == "Aurel")
 precondition(DictationData.correction("Hi Andree", "Hi André")?.word == "André")
 precondition(DictationData.correction("I went their", "I went there") == nil)   // an everyday word is no name to learn
 let sarda = DictationData.correction("Can you make sure Sarda does that?", "Can you make sure Saarth does that?")
@@ -107,11 +105,11 @@ print("correction bounds ok")
         self.assertIn('correction bounds ok', run_swift(self, swift))
 
     def test_learned_fix_swaps_the_heard_word_until_forgotten(self):
-        source = (ROOT / 'Atticus.swift').read_text()
+        source = (ROOT / 'Aurel.swift').read_text()
         store = source[source.index('enum DictationData {'):source.index('enum Prefs {')]
         swift = r'''import AppKit
 struct Prefs {
-    static var path = "/tmp/unused-atticus-dictation-test/settings.json"
+    static var path = "/tmp/unused-aurel-dictation-test/settings.json"
     static var d: [String: Any] = [:]
     static func bool(_ k: String) -> Bool { false }
     static func set(_ k: String, _ v: Any) -> Bool { d[k] = v; return true }
@@ -135,11 +133,11 @@ print("learned fixes ok")
         self.assertEqual(source.count('DictationData.forget('), 2)   # Undo and Settings remove both drop the fix
 
     def test_words_fit_the_text_around_the_cursor(self):
-        source = (ROOT / 'Atticus.swift').read_text()
+        source = (ROOT / 'Aurel.swift').read_text()
         store = source[source.index('enum DictationData {'):source.index('enum Prefs {')]
         swift = r"""import AppKit
 struct Prefs {
-    static var path = "/tmp/unused-atticus-dictation-test/settings.json"
+    static var path = "/tmp/unused-aurel-dictation-test/settings.json"
     static var d: [String: Any] = ["dictateWords": ["Saarth"]]
     static func bool(_ k: String) -> Bool { false }
     static func set(_ k: String, _ v: Any) -> Bool { d[k] = v; return true }
@@ -168,39 +166,39 @@ print("fit ok")
         self.assertIn('fit ok', run_swift(self, swift))
 
     def test_dictionary_reaches_cleanup_and_keeps_saved_rules(self):
-        import atticus
-        with patch.object(atticus, 'pref', return_value=['Saarth', 'Atticus', None, 'bad\nword']), \
-             patch.object(atticus, 'relevant_rules', return_value='Spell my name Saarth.'):
-            request = atticus.dictate_request('say Sarth')
-            self.assertIn('["Saarth", "Atticus"]', request)
+        import aurel
+        with patch.object(aurel, 'pref', return_value=['Saarth', 'Aurel', None, 'bad\nword']), \
+             patch.object(aurel, 'relevant_rules', return_value='Spell my name Saarth.'):
+            request = aurel.dictate_request('say Sarth')
+            self.assertIn('["Saarth", "Aurel"]', request)
             self.assertIn('Spell my name Saarth.', request)
             self.assertNotIn('bad', request)
-            self.assertEqual(atticus.dictate_result('say Sarth', '<cleaned>Say Saarth.</cleaned>', {'Sarth': 'Saarth'}), 'Say Saarth.')
+            self.assertEqual(aurel.dictate_result('say Sarth', '<cleaned>Say Saarth.</cleaned>', {'Sarth': 'Saarth'}), 'Say Saarth.')
 
     def test_cleanup_gets_sound_alike_hints_and_may_write_the_name(self):
-        import atticus
+        import aurel
         prefs = {'dictateWords': ['Saarth'], 'dictateFixes': {'some veto': 'Saarth', 'old': 'Gone'}}
-        with patch.object(atticus, 'pref', side_effect=lambda k, d=None: prefs.get(k, d)), \
-             patch.object(atticus, 'relevant_rules', return_value=''):
-            self.assertEqual(atticus.dictate_hints('Can you make sure Sarda does that?', ['Saarth']), {'Sarda': 'Saarth'})
-            self.assertEqual(atticus.dictate_hints('You make sure some veto that.', ['Saarth']), {'some veto': 'Saarth'})   # a learned heard form
-            self.assertEqual(atticus.dictate_hints('Saarth sorted it', ['Saarth']), {})   # already said right
-            self.assertEqual(atticus.dictate_hints('Hi there', ['Saarth']), {})
-            self.assertEqual(atticus.dictate_hints('Can you ask some of you to do that?', ['Semva']).get('some of you'), 'Semva')
+        with patch.object(aurel, 'pref', side_effect=lambda k, d=None: prefs.get(k, d)), \
+             patch.object(aurel, 'relevant_rules', return_value=''):
+            self.assertEqual(aurel.dictate_hints('Can you make sure Sarda does that?', ['Saarth']), {'Sarda': 'Saarth'})
+            self.assertEqual(aurel.dictate_hints('You make sure some veto that.', ['Saarth']), {'some veto': 'Saarth'})   # a learned heard form
+            self.assertEqual(aurel.dictate_hints('Saarth sorted it', ['Saarth']), {})   # already said right
+            self.assertEqual(aurel.dictate_hints('Hi there', ['Saarth']), {})
+            self.assertEqual(aurel.dictate_hints('Can you ask some of you to do that?', ['Semva']).get('some of you'), 'Semva')
             text = 'You make sure start to does that.'
-            request = atticus.dictate_spellings(text)
+            request = aurel.dictate_spellings(text)
             self.assertIn('"start": "Saarth"', request)
-            hints = atticus.dictate_hints(text, ['Saarth'])
-            self.assertEqual(atticus.dictate_result(text, '<cleaned>You make sure Saarth does that.</cleaned>', hints), 'You make sure Saarth does that.')
+            hints = aurel.dictate_hints(text, ['Saarth'])
+            self.assertEqual(aurel.dictate_result(text, '<cleaned>You make sure Saarth does that.</cleaned>', hints), 'You make sure Saarth does that.')
             ordinary = 'Send the update to him this afternoon please.'
             changed = '<cleaned>Send the update to Saarth this afternoon please.</cleaned>'
-            self.assertEqual(atticus.dictate_result(ordinary, changed, {}), ordinary)
-            self.assertEqual(atticus.dictate_result(ordinary, changed, {'him': 'Saarth'}),
+            self.assertEqual(aurel.dictate_result(ordinary, changed, {}), ordinary)
+            self.assertEqual(aurel.dictate_result(ordinary, changed, {'him': 'Saarth'}),
                              'Send the update to Saarth this afternoon please.')
-        self.assertEqual((atticus.dictate_sound('Saarth'), atticus.dictate_sound('start to'), atticus.dictate_sound('André')), ('srt', 'strt', 'amtr'))   # same as DictationData.sound
+        self.assertEqual((aurel.dictate_sound('Saarth'), aurel.dictate_sound('start to'), aurel.dictate_sound('André')), ('srt', 'strt', 'amtr'))   # same as DictationData.sound
 
     def test_correction_window_is_scoped_and_secure_before_read(self):
-        source = (ROOT / 'Atticus.swift').read_text()
+        source = (ROOT / 'Aurel.swift').read_text()
         monitor = source[source.index('    func prepareDictation('):source.index('    func stopDictationCleanup(')]
         for guard in ['addingTimeInterval(20)', 'dictateID == id', '!engine.isRunning', '!busy',
                       'frontmostApplication == target.app', 'CFEqual(focused, target.focus)',
@@ -240,70 +238,53 @@ print("fit ok")
         self.assertIn('Allow Accessibility in System Settings → Privacy & Security → Accessibility', start)
 
 
-@unittest.skipUnless(shutil.which('node'), 'Node UI logic check')
 class DictationUIDataTests(unittest.TestCase):
     def test_dictionary_and_history_actions_use_text_and_search_raw(self):
-        page = (ROOT / 'ui/settings.html').read_text()
-        code = page[page.index('  const svg = d =>'):page.index("  document.querySelectorAll('nav button[data-s] .ni')")]
-        script = r'''const assert = (x, m) => { if (!x) throw Error(m); };
-class Element {
-  constructor() { this.children = []; this.value = ''; this.style = {}; }
-  append(...x) { this.children.push(...x); }
-  replaceChildren(...x) { this.children = x; }
-  setAttribute() {}
-}
-const ids = new Map(), $ = id => { if (!ids.has(id)) ids.set(id, new Element()); return ids.get(id); };
-const document = {createElement: () => new Element()}, posts = [];
-const post = m => posts.push(m);
-let action;
-const showNotice = (text, label, run) => { action = run; };
-''' + code + r'''
-dictations = {words:['<Saarth>'], history:[{id:'1',timestamp:1,app:'Editor',text:'Final <text>',raw:'Raw Sarth'},{id:'2',timestamp:2,app:'Chat',text:'Other text'}], stats:{today:2, words:9, minutes:1, sessions:2}};
-paintDictation();
-assert([$('dstoday'), $('dsall'), $('dssaved'), $('dssavedunit'), $('dssessions')].map(e => String(e.textContent)).join() === '2,9,1,minutes,2', 'stats absent');
-dictations.stats = {today: 0, words: 12345, minutes: 90, sessions: 1}; paintDictation();
-assert($('dsall').textContent === '12,345' && $('dssaved').textContent === '1.5' && $('dssavedunit').textContent === 'hours', 'stats not formatted for long use');
-const word = $('dictationwords').children[0];
-assert(word.children[0].value === '<Saarth>', 'dictionary did not preserve literal text');
-assert(word.children[1].hidden === true, 'save icon showed before an edit');
-word.children[0].value = 'Saarth'; word.children[0].oninput(); assert(word.children[1].hidden === false, 'save icon hidden after an edit');
-word.onsubmit({preventDefault(){}});
-assert(posts.at(-1).word === 'Saarth' && posts.at(-1).old === '<Saarth>', 'edit lost original word');
-word.children[2].onclick(); assert(posts.at(-1).do === 'dictationWordDelete', 'remove not wired');
-$('dictationsearch').value = 'raw sarth'; $('dictationsearch').oninput();
-assert($('dictationhistory').children.length === 1, 'raw transcript not searchable');
-let row = $('dictationhistory').children[0];
-assert(row.children[0].children[1].textContent === 'Final <text>', 'history text did not stay literal');
-row.children[1].onclick(); assert(posts.at(-1).do === 'copy' && posts.at(-1).text === 'Final <text>', 'copy not wired');
-row.children[2].onclick(); assert(posts.at(-1).do === 'dictationDelete' && posts.at(-1).id === '1', 'delete lost row id');
-$('dictationsearch').value = 'chat'; $('dictationsearch').oninput();
-assert($('dictationhistory').children.length === 1, 'app not searchable');
-const count = posts.length; $('dictationclear').onclick();
-assert(posts.length === count, 'clear all did not wait for click');
-action(); assert(posts.at(-1).do === 'dictationClear', 'clear all not wired');
-$('dictationword').value = 'New'; $('dictationadd').onsubmit({preventDefault(){}});
-assert(posts.at(-1).word === 'New' && $('dictationword').value === '', 'add not wired');
-dictations = {words: [], history: [], stats: {}}; $('dictationsearch').value = ''; paintDictation();
-assert($('dictationwords').hidden && $('dictationnote').textContent.startsWith('No words yet'), 'empty dictionary not a quiet line');
-assert($('dictationhistory').children.length === 1 && $('dictationhistory').children[0].className === 'empty', 'empty history not a quiet line');
-'''
-        result = subprocess.run(['node'], input=script, text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        settings = (ROOT / 'Settings.swift').read_text()
+        view = lambda name: settings[settings.index(f'struct {name}:'):settings.index('\n}\n', settings.index(f'struct {name}:'))]
+        stats, history = view('Stats'), view('History')
+        between = lambda s, a, b: s[s.index(a):s.index(b, s.index(a))]
+        swift = between(stats, '    func fmt(', '\n    }') + '\n    }\n' \
+            + 'func cells(_ m: SettingsModel) -> [String] {\n' + between(stats, '        let n = m.stats', '        GeometryReader') + '    return cells.flatMap { [$0.1, $0.2] }\n}\n' \
+            + between(settings, 'private let askDate', '\n').replace('private ', '', 1) + '\n' \
+            + 'func rows(_ m: SettingsModel) -> [String] {\n' + between(history, '        let q = m.search.lowercased()', '        ScrollView') + '    return rows.map { $0["text"] as? String ?? "" }\n}\n' + r"""
+let m = SettingsModel(); var posts: [[String: Any]] = []; m.post = { posts.append($0) }
+m.receive("dictation", ["words": ["<Saarth>"], "history": [["id": "1", "timestamp": 1, "app": "Editor", "text": "Final <text>", "raw": "Raw Sarth"], ["id": "2", "timestamp": 2, "app": "Chat", "text": "Other text"]],
+                        "stats": ["today": 2, "words": 9, "minutes": 1, "sessions": 2]] as [String: Any])
+precondition(cells(m) == ["2", "words", "9", "words", "1", "minutes", "2", "dictations"], "\(cells(m))")
+precondition(m.words == ["<Saarth>"], "dictionary did not keep literal text")
+m.search = "raw sarth"; precondition(rows(m) == ["Final <text>"], "raw transcript not searchable")
+m.search = "chat"; precondition(rows(m) == ["Other text"], "app not searchable")
+m.search = ""; precondition(rows(m) == ["Other text", "Final <text>"], "history not newest first")
+m.receive("dictation", ["words": [String](), "history": [[String: Any]](), "stats": ["today": 0, "words": 12345, "minutes": 90, "sessions": 1]] as [String: Any])
+precondition(cells(m)[2...5] == ["12,345", "words", "1.5", "hours"], "stats not formatted for long use: \(cells(m))")
+var cleared = false; m.showNotice("Clear all saved dictations?", "Clear all") { cleared = true }
+precondition(!cleared && posts.isEmpty, "clear all did not wait for its click")
+"""
+        native_ui(self, swift)
+        dictate = view('DictationSection')
+        self.assertIn('m.showNotice("Clear all saved dictations?", "Clear all") { m.post(["do": "dictationClear"]) }', dictate)   # clear all waits for its click
+        self.assertIn('AddRow(placeholder: "Add a word or phrase", button: "Add Word", first: true) { m.post(["do": "dictationWord", "word": $0]) }', dictate)
+        self.assertIn('{ add(text); text = "" }', view('AddRow'))   # the field empties after Add
+        self.assertIn('m.words.isEmpty ? "No words yet. Add names, slang or product names." : "Names, slang and product names."', dictate)
+        self.assertIn('"Your dictations and asks will appear here."', history)
+        word = view('WordRow')
+        self.assertIn('.onAppear { text = word }', word)   # the word as typed, never as markup
+        self.assertIn('if text != word { RowX(icon: RowIcon.check, shown: true, save: true) { m.post(["do": "dictationWord", "old": word, "word": text]) } }', word)   # save shows once edited
+        self.assertIn('m.post(["do": "dictationWordDelete", "word": word])', word)
+        row = view('HistRow')
+        self.assertIn('m.post(["do": "copy", "text": (ask ? item["reply"] : item["text"]) ?? ""])', row)
+        self.assertIn('if !ask { RowX(icon: RowIcon.trash, shown: hover) { m.post(["do": "dictationDelete", "id": item["id"] ?? ""]) } }', row)
+        self.assertIn('T(s: item["text"] as? String ?? "", lh: 1.45)', row)   # history text stays literal
 
     def test_learned_toast_undo_posts_and_disables_its_button(self):
-        page = (ROOT / 'ui/ui.html').read_text()
-        method = page[page.index('    learned(word)'):page.index('    line(l)')]
-        script = r'''let label, sent, button;
-const pill = (state, text) => { label = text; return {append: (...args) => { button = args[1]; }}; }, fit = () => {};
-const document = {createElement: () => ({})};
-const post = message => { sent = message; };
-const ui = {''' + method + r'''};
-ui.learned('Saarth'); button.onclick();
-if (label !== "Learned “Saarth”" || !button.disabled || !sent.learnedUndo) throw Error('learned undo failed');
-'''
-        result = subprocess.run(['node'], input=script, text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
+        native_ui(self, """let m = BoxModel(); var sent: [[String: Any]] = []; m.post = { sent.append($0) }
+m.receive("learned", "Saarth")
+precondition(m.dn == "Learned “Saarth”" && m.dnButtons.map { $0.0 } == ["Undo"], m.dn)
+m.dnButtons[0].1()
+precondition(sent.count == 1 && sent[0]["learnedUndo"] as? Bool == true, "learned undo not sent")
+precondition(m.dnButtons.isEmpty, "Undo stays clickable after it ran")
+""")
 
 if __name__ == '__main__':
     unittest.main()

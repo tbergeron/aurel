@@ -1,5 +1,5 @@
 {
-  description = "Atticus: macOS voice and AI assistant";
+  description = "Aurel: macOS voice and AI assistant";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -38,7 +38,7 @@
           pkgs = pkgsFor system;
         in
         pkgs.writeShellApplication {
-          name = "atticus";
+          name = "aurel";
           runtimeInputs = [ pkgs.python313 ];
           text = ''
             set -euo pipefail
@@ -48,24 +48,24 @@
                 exec bash "$src/build.sh"
                 ;;
               --check)
-                python3 -c 'import pathlib, sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' "$src/atticus.py"
+                python3 -c 'import pathlib, sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' "$src/aurel.py"
                 bash -n "$src/build.sh"
                 bash -n "$src/install.sh"
-                printf '%s\n' 'atticus source checks passed'
+                printf '%s\n' 'aurel source checks passed'
                 ;;
               --version)
-                printf '%s\n' "atticus ${version}"
+                printf '%s\n' "aurel ${version}"
                 ;;
               --help|-h|help)
                 cat <<'EOF'
-            Atticus launcher for macOS.
+            Aurel launcher for macOS.
 
             Usage:
-              atticus              Install or update Atticus.app
-              atticus --install    Install or update Atticus.app
-              atticus --check      Run packaged source checks
-              atticus --version    Print the packaged version
-              atticus --help       Show this help
+              aurel              Install or update Aurel.app
+              aurel --install    Install or update Aurel.app
+              aurel --check      Run packaged source checks
+              aurel --version    Print the packaged version
+              aurel --help       Show this help
 
             Building requires macOS 26 or later and Apple's command line tools.
             EOF
@@ -77,10 +77,10 @@
             esac
           '';
           meta = with pkgs.lib; {
-            description = "Atticus macOS app launcher";
-            homepage = "https://github.com/SaarthurR/atticus-mac";
+            description = "Aurel macOS app launcher";
+            homepage = "https://github.com/tbergeron/aurel";
             license = licenses.mit;
-            mainProgram = "atticus";
+            mainProgram = "aurel";
             platforms = targetSystems;
           };
         };
@@ -89,30 +89,30 @@
       packages = forEachSystem (
         system:
         let
-          atticus = packageFor system;
+          aurel = packageFor system;
         in
         {
-          inherit atticus;
-          atticus-mac = atticus;
-          source = atticus;
-          default = atticus;
+          inherit aurel;
+          aurel-mac = aurel;
+          source = aurel;
+          default = aurel;
         }
       );
 
       apps = forEachSystem (
         system:
         let
-          atticus = self.packages.${system}.default;
-          program = "${atticus}/bin/atticus";
+          aurel = self.packages.${system}.default;
+          program = "${aurel}/bin/aurel";
           app = {
             type = "app";
             inherit program;
-            inherit (atticus) meta;
+            inherit (aurel) meta;
           };
         in
         {
-          atticus = app;
-          atticus-mac = app;
+          aurel = app;
+          aurel-mac = app;
           default = app;
         }
       );
@@ -132,7 +132,7 @@
               pkgs.act
             ];
             shellHook = ''
-              echo "Atticus development shell. Building the app requires Apple's command line tools."
+              echo "Aurel development shell. Building the app requires Apple's command line tools."
             '';
           };
       });

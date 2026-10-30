@@ -1,4 +1,4 @@
-Atticus.app/
+Aurel.app/
 __pycache__/
 .DS_Store
 
@@ -11,13 +11,11 @@ __pycache__/
 *.p12
 *.pfx
 settings.json
+!ui/settings.json
 skills.json
 recent.jsonl
 log.jsonl
 memory.md
-license
-# the MIT license file: on macOS "license" above matches it too
-!LICENSE
 app.err
 
 # GitHub holds just the app. Agent instructions, skills and the website stay on this Mac.
@@ -29,7 +27,7 @@ CLAUDE.local.md
 .claude/
 .cursor/
 index.html
-docs/atticus-film.mp4
+docs/aurel-film.mp4
 docs/film-poster.png
 
 # Nix build result symlinks

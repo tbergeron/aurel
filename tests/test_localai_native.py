@@ -1,4 +1,4 @@
-"""Local AI engine (Atticus.swift `// MARK: Local AI` section) compiled alone against a scratch ATTICUS_DIR."""
+"""Local AI engine (Aurel.swift `// MARK: Local AI` section) compiled alone against a scratch AUREL_DIR."""
 import functools
 import hashlib
 import http.server
@@ -17,9 +17,9 @@ from unittest.mock import patch
 from tests import run_swift
 
 ROOT = Path(__file__).resolve().parents[1]
-GEMMA = Path.home() / '.config/atticus/llm/gemma-4-E4B_q4_0-it.gguf'
+GEMMA = Path.home() / '.config/aurel/llm/gemma-4-E4B_q4_0-it.gguf'
 
-# Stands in for llama-server: answers /health on the port Atticus gives it.
+# Stands in for llama-server: answers /health on the port Aurel gives it.
 FAKE_SERVER = f"""#!{sys.executable} -I
 import http.server, sys
 port = int(sys.argv[sys.argv.index('--port') + 1])
@@ -31,7 +31,7 @@ http.server.HTTPServer(('127.0.0.1', port), H).serve_forever()
 
 
 def engine():
-    source = (ROOT / 'Atticus.swift').read_text()
+    source = (ROOT / 'Aurel.swift').read_text()
     prefs = source[source.index('enum Prefs'):source.index('func applySharing(')]
     local = source[source.index('// MARK: Local AI'):source.index('// MARK: end Local AI')]
     return 'import Cocoa\nlet controlKey = 1, optionKey = 2\n' + prefs + local
@@ -49,12 +49,12 @@ def tarball():
 @unittest.skipUnless(sys.platform == 'darwin', 'macOS Swift regression')
 class LocalAINativeTests(unittest.TestCase):
     def scratch(self):
-        root = Path(tempfile.mkdtemp(prefix='atticus-local-')); self.addCleanup(shutil.rmtree, root, True)
-        p = patch.dict(os.environ, {'ATTICUS_DIR': str(root)}); p.start(); self.addCleanup(p.stop)
+        root = Path(tempfile.mkdtemp(prefix='aurel-local-')); self.addCleanup(shutil.rmtree, root, True)
+        p = patch.dict(os.environ, {'AUREL_DIR': str(root)}); p.start(); self.addCleanup(p.stop)
         return root
 
     def serve(self, files):
-        site = Path(tempfile.mkdtemp(prefix='atticus-site-')); self.addCleanup(shutil.rmtree, site, True)
+        site = Path(tempfile.mkdtemp(prefix='aurel-site-')); self.addCleanup(shutil.rmtree, site, True)
         for name, data in files.items(): (site / name).write_bytes(data)
         class Quiet(http.server.SimpleHTTPRequestHandler):
             def log_message(self, *a): pass
@@ -102,11 +102,11 @@ print("ok")
         self.assertEqual(out.strip(), 'ok')
 
     def test_live_router_with_the_real_runtime(self):
-        if not GEMMA.exists() or not os.environ.get('ATTICUS_LIVE_LOCAL'):
-            self.skipTest('set ATTICUS_LIVE_LOCAL=1 with Gemma downloaded: downloads llama.cpp and runs the model')
+        if not GEMMA.exists() or not os.environ.get('AUREL_LIVE_LOCAL'):
+            self.skipTest('set AUREL_LIVE_LOCAL=1 with Gemma downloaded: downloads llama.cpp and runs the model')
         root = self.scratch()
         (root / 'llm').mkdir(); (root / 'llm' / GEMMA.name).symlink_to(GEMMA)
-        import atticus
+        import aurel
         out = run_swift(self, engine() + f"""
 let l = LocalAI.shared, sem = DispatchSemaphore(value: 0)
 l.download("gemma4") {{ sem.signal() }}
@@ -116,9 +116,9 @@ let url = l.address()
 var reply = ""
 for _ in 0..<600 where reply.isEmpty {{
     var r = URLRequest(url: URL(string: url + "/v1/chat/completions")!); r.httpMethod = "POST"
-    r.httpBody = try! JSONSerialization.data(withJSONObject: ["messages": [["role": "system", "content": {json.dumps(atticus.ROUTER)}],
+    r.httpBody = try! JSONSerialization.data(withJSONObject: ["messages": [["role": "system", "content": {json.dumps(aurel.ROUTER)}],
         ["role": "user", "content": "Front app: Safari, window \\"Docs\\"\\nOpen apps: Safari, Slack\\nRequest: switch over to slack"]],
-        "grammar": {json.dumps(atticus.ROUTER_GRAMMAR)}, "temperature": 0, "max_tokens": 20])
+        "grammar": {json.dumps(aurel.ROUTER_GRAMMAR)}, "temperature": 0, "max_tokens": 20])
     if let (d, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
        let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let c = j["choices"] as? [[String: Any]],
        let m = c.first?["message"] as? [String: Any] {{ reply = m["content"] as? String ?? "" }}

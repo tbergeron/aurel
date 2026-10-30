@@ -1,9 +1,9 @@
-// Parakeet speech for Atticus, through FluidAudio.
-//   atticus-parakeet download <model> <marker>   fetches the model and the voice detector, prints "progress <0-1>" lines,
-//                                                then writes the model folder's path to <marker> (Atticus reads it as "downloaded")
-//   atticus-parakeet serve <model>               prints "ready", then per request reads a UInt32 sample count and that many
+// Parakeet speech for Aurel, through FluidAudio.
+//   aurel-parakeet download <model> <marker>   fetches the model and the voice detector, prints "progress <0-1>" lines,
+//                                                then writes the model folder's path to <marker> (Aurel reads it as "downloaded")
+//   aurel-parakeet serve <model>               prints "ready", then per request reads a UInt32 sample count and that many
 //                                                16 kHz mono Float32 samples (little-endian) on stdin, and answers one JSON line
-//   atticus-parakeet bench <model> <audio file>  load and transcription times, memory and the text, cold and then warm
+//   aurel-parakeet bench <model> <audio file>  load and transcription times, memory and the text, cold and then warm
 // Models: v3 (multilingual), ultra (most accurate), redux (light), v2 (English).
 import CoreML
 import Darwin
@@ -12,7 +12,7 @@ import Foundation
 
 func say(_ line: String) { FileHandle.standardOutput.write(Data((line + "\n").utf8)) }
 func fail(_ why: String) -> Never { say("error " + why.split(whereSeparator: \.isNewline).joined(separator: " ")); exit(1) }
-let usage = "usage: atticus-parakeet download <model> <marker> | serve <model> | bench <model> <audio>"
+let usage = "usage: aurel-parakeet download <model> <marker> | serve <model> | bench <model> <audio>"
 
 let args = CommandLine.arguments
 let versions: [String: AsrModelVersion] = ["v3": .v3, "v2": .v2, "ultra": .ultra, "redux": .redux]
@@ -36,7 +36,7 @@ func readExactly(_ n: Int) -> Data? {
     var d = Data(capacity: n)
     while d.count < n {
         let chunk = FileHandle.standardInput.readData(ofLength: n - d.count)
-        if chunk.isEmpty { return nil }   // Atticus closed the pipe
+        if chunk.isEmpty { return nil }   // Aurel closed the pipe
         d.append(chunk)
     }
     return d
@@ -66,7 +66,7 @@ func footprintMB() -> Double {   // what Activity Monitor calls Memory
 
 switch args[1] {
 case "download" where args.count == 4:
-    let progress: ProgressHandler = { p in say("progress \((p.fractionCompleted * 100).rounded() / 100)") }   // Atticus keeps only the latest
+    let progress: ProgressHandler = { p in say("progress \((p.fractionCompleted * 100).rounded() / 100)") }   // Aurel keeps only the latest
     do {
         _ = try await AsrModels.downloadAndLoad(version: version, encoderComputeUnits: encoderUnits, progressHandler: progress)   // load too: compiles it once
         _ = try await VadManager()

@@ -1,4 +1,4 @@
-"""Real AX integration, confined to an accessory fixture and temporary Atticus binary."""
+"""Real AX integration, confined to an accessory fixture and temporary Aurel binary."""
 import json
 import os
 import re
@@ -9,6 +9,7 @@ import signal
 import tempfile
 import time
 import unittest
+from tests import app_swiftc
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,16 +21,16 @@ class NativeHandsTests(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.temp.cleanup)
         cls.root = Path(cls.temp.name)
-        cls.binary = cls.root / 'Atticus'
-        cls.env = {**os.environ, 'ATTICUS_DIR': str(cls.root), 'ATTICUS_RESOURCES_DIR': str(ROOT),
-                   'ATTICUS_AX_ONLY': '1', 'ATTICUS_HANDS_TIMING':'1', 'ATTICUS_HANDS_STATE': str(cls.root / 'hands.json')}
-        compiled = subprocess.run(['swiftc', '-O', str(ROOT / 'Atticus.swift'), '-o', str(cls.binary)], capture_output=True, text=True)
+        cls.binary = cls.root / 'Aurel'
+        cls.env = {**os.environ, 'AUREL_DIR': str(cls.root), 'AUREL_RESOURCES_DIR': str(ROOT),
+                   'AUREL_AX_ONLY': '1', 'AUREL_HANDS_TIMING':'1', 'AUREL_HANDS_STATE': str(cls.root / 'hands.json')}
+        compiled = subprocess.run(app_swiftc(cls.binary, '-O'), capture_output=True, text=True)
         if compiled.returncode:
             raise AssertionError(compiled.stderr)
         fixture = cls.root / 'HandsFixture.app/Contents/MacOS/fixture'
         fixture.parent.mkdir(parents=True)
         (fixture.parent.parent / 'Info.plist').write_text('''<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.atticus.hands.fixture</string><key>CFBundleExecutable</key><string>fixture</string><key>CFBundleName</key><string>Hands Fixture</string><key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/><key>NSPrincipalClass</key><string>NSApplication</string><key>CFBundleVersion</key><string>1</string><key>NSHighResolutionCapable</key><true/></dict></plist>''')
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.aurel.hands.fixture</string><key>CFBundleExecutable</key><string>fixture</string><key>CFBundleName</key><string>Hands Fixture</string><key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/><key>NSPrincipalClass</key><string>NSApplication</string><key>CFBundleVersion</key><string>1</string><key>NSHighResolutionCapable</key><true/></dict></plist>''')
         compiled = subprocess.run(['swiftc', str(ROOT / 'tests/hands_fixture.swift'), '-o', str(fixture)], capture_output=True, text=True)
         if compiled.returncode:
             raise AssertionError(compiled.stderr)
@@ -37,7 +38,7 @@ class NativeHandsTests(unittest.TestCase):
     def call(self, *args, receipt=None, ok=True):
         start = time.perf_counter()
         result = subprocess.run([str(self.binary), '--hands', *args], input=json.dumps(receipt) if receipt else None,
-                                env={**self.env, 'ATTICUS_HANDS_RECEIPT': '1' if receipt else '0'},
+                                env={**self.env, 'AUREL_HANDS_RECEIPT': '1' if receipt else '0'},
                                 capture_output=True, text=True, timeout=10)
         self.elapsed = (time.perf_counter() - start) * 1000
         match = re.search(r"HANDS NET ([\d.]+) ms",result.stderr)
@@ -56,7 +57,7 @@ class NativeHandsTests(unittest.TestCase):
 
     def session_action(self, *args, before_allow=None, ok=True):
         process = subprocess.Popen([str(self.binary), '--hands', *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   env={**self.env, 'ATTICUS_HANDS_SESSION':'1'}, text=True)
+                                   env={**self.env, 'AUREL_HANDS_SESSION':'1'}, text=True)
         receipt = json.loads(process.stdout.readline())
         if before_allow: before_allow()
         out, err = process.communicate('y\n', timeout=10)
@@ -72,7 +73,7 @@ class NativeHandsTests(unittest.TestCase):
     def test_fixture_actions_and_timings(self):
         # Permission probe deliberately names an impossible PID; never inspect a user window.
         probe = subprocess.run([str(self.binary), '--hands', 'see', '2147483647'], env=self.env, capture_output=True, text=True)
-        if 'Allow Atticus' in probe.stdout:
+        if 'Allow Aurel' in probe.stdout:
             print('HANDS TIMINGS (fixture): unavailable — temporary binary lacks Accessibility permission', flush=True)
             self.skipTest('Temporary binary lacks Accessibility permission; no permission changes made')
         fixture = self.root / 'HandsFixture.app/Contents/MacOS/fixture'
@@ -141,13 +142,13 @@ class NativeHandsTests(unittest.TestCase):
         self.assertRegex(self.call('see', pid), r'CheckBox "Enabled" = "(?:1|true)"')
         self.call('press', 'cmd+shift+a') # Posted only to the fixture PID, never global.
         self.assertIn('Window settled', self.call('wait', '.5'))
-        if os.environ.get('ATTICUS_LIVE_MOUSE') == '1':
-            saved = self.env['ATTICUS_AX_ONLY']; self.env['ATTICUS_AX_ONLY'] = '0'
+        if os.environ.get('AUREL_LIVE_MOUSE') == '1':
+            saved = self.env['AUREL_AX_ONLY']; self.env['AUREL_AX_ONLY'] = '0'
             try:
                 self.call('click', 'Enabled', 'double')
                 self.call('click', 'Enabled', 'right')
                 self.action('drag', 'Enabled', 'Name')
-            finally: self.env['ATTICUS_AX_ONLY'] = saved
+            finally: self.env['AUREL_AX_ONLY'] = saved
         self.call('see', pid)
         receipt, stale = self.session_action('click',str(export['id']),before_allow=lambda:command('stale'),ok=False)
         self.assertEqual(receipt['labels'],['Export'])
@@ -157,9 +158,9 @@ class NativeHandsTests(unittest.TestCase):
         self.assertIn('More than one', self.call('click', 'Export', ok=False))
         self.assertIn('a sheet opened', self.call('click', 'Export', 'near', 'Name'))
         command('close-sheet'); self.call('see', pid)
-        self.assertIn('Use atticus.py', self.call('click', 'Send', ok=False))
-        self.assertIn('Use atticus.py', self.call('press', 'cmd+q', ok=False))
-        self.assertIn('Use atticus.py', self.call('type', 'Password', 'secret', ok=False))
+        self.assertIn('Use aurel.py', self.call('click', 'Send', ok=False))
+        self.assertIn('Use aurel.py', self.call('press', 'cmd+q', ok=False))
+        self.assertIn('Use aurel.py', self.call('type', 'Password', 'secret', ok=False))
         self.action('click', 'Send')
         self.assertEqual((self.root / 'fixture-result').read_text(), 'Send')
         (self.root / 'settings.json').write_text('{"safe":false}')
@@ -182,7 +183,7 @@ class NativeHandsTests(unittest.TestCase):
 
 
     def test_quartz_event_spies_post_to_the_app_without_moving_the_pointer(self):
-        source = (ROOT / 'Atticus.swift').read_text()
+        source = (ROOT / 'Aurel.swift').read_text()
         background = source[source.index('    static func mouse('):source.index('    static func screenLease(')] + source[source.index('    static func wheel('):source.index('    static func contentMoved(')]
         for forbidden in ('CGWarpMouseCursorPosition', 'post(tap', 'activate', 'screenLease', 'restoreFocus'):
             self.assertNotIn(forbidden, background)
@@ -267,16 +268,16 @@ print("hands Quartz spies ok")
         self.assertIn('hands Quartz spies ok',result.stdout)
 
     def test_background_input_reaches_a_window_behind_without_focus_or_pointer(self):
-        env = {k: v for k, v in self.env.items() if k != 'ATTICUS_AX_ONLY'}   # the real Quartz paths
+        env = {k: v for k, v in self.env.items() if k != 'AUREL_AX_ONLY'}   # the real Quartz paths
         def hands(*args, receipt=None, extra={}):
             result = subprocess.run([str(self.binary), '--hands', *args], input=json.dumps(receipt) if receipt else None,
-                                    env={**env, **extra, 'ATTICUS_HANDS_RECEIPT': '1' if receipt else '0'}, capture_output=True, text=True, timeout=10)
+                                    env={**env, **extra, 'AUREL_HANDS_RECEIPT': '1' if receipt else '0'}, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr); return result.stdout
-        if 'Allow Atticus' in subprocess.run([str(self.binary), '--hands', 'see', '2147483647'], env=env, capture_output=True, text=True).stdout:
+        if 'Allow Aurel' in subprocess.run([str(self.binary), '--hands', 'see', '2147483647'], env=env, capture_output=True, text=True).stdout:
             self.skipTest('Temporary binary lacks Accessibility permission; no permission changes made')
         bundle = self.root / 'BackgroundFixture.app'; executable = bundle / 'Contents/MacOS/fixture'; executable.parent.mkdir(parents=True, exist_ok=True)
         (bundle / 'Contents/Info.plist').write_text('''<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.atticus.background.fixture</string><key>CFBundleExecutable</key><string>fixture</string><key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/><key>NSPrincipalClass</key><string>NSApplication</string></dict></plist>''')
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.aurel.background.fixture</string><key>CFBundleExecutable</key><string>fixture</string><key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/><key>NSPrincipalClass</key><string>NSApplication</string></dict></plist>''')
         compiled = subprocess.run(['swiftc', str(ROOT / 'tests/background_fixture.swift'), '-o', str(executable)], capture_output=True, text=True)
         self.assertEqual(compiled.returncode, 0, compiled.stderr)
         ready, log = self.root / 'background-ready', self.root / 'background-events.jsonl'
@@ -307,21 +308,21 @@ print("hands Quartz spies ok")
         self.assertTrue(not any(r['active'] for r in rows if r['type'] == 10), rows)   # a click keys its window only for that click: the keys after it find the app inactive again
         self.assertEqual(len({tuple(r['pointer']) for r in rows}), 1, rows)   # the pointer never moved
         print('BACKGROUND INPUT (fixture): ' + json.dumps(rows), flush=True)
-        front = {'ATTICUS_FOCUS_REQUESTED': '1'}   # the user asked to see the work: the old foreground pointer path
+        front = {'AUREL_FOCUS_REQUESTED': '1'}   # the user asked to see the work: the old foreground pointer path
         hands('click', 'Pad', receipt=json.loads(hands('label', 'click', 'Pad', extra=front)), extra=front); time.sleep(.5)
         clicks = [r for r in map(json.loads, log.read_text().splitlines()[len(rows):]) if r['type'] == 1 and r['inWindow']]
         self.assertEqual(len(clicks), 1, clicks); self.assertTrue(clicks[0]['active'], clicks)
 
     def test_ax_algorithms_with_in_memory_window(self):
-        source = (ROOT / 'Atticus.swift').read_text()
+        source = (ROOT / 'Aurel.swift').read_text()
         section = source[source.index('enum Hands {'):source.index('// MARK: - End Hands')]
         header = section[:section.index('    static func attribute(')]
         header = header.replace('AXUIElement','TestElement')
-        header = header.replace('ProcessInfo.processInfo.environment', '["ATTICUS_DIR":CommandLine.arguments[1], "ATTICUS_AX_ONLY":"1"]')
+        header = header.replace('ProcessInfo.processInfo.environment', '["AUREL_DIR":CommandLine.arguments[1], "AUREL_AX_ONLY":"1"]')
         names = ['documentIdentity','identify','read','children','array','name','capture','save','load','at','point','picturePoint','visibleFrame','resolve','menuItem','menu','screenLease',
                  'pixelsChanged','contentMoved','pageKeysAllowed','scrollArea','scroll','findText','scrollTo','stringValue','selectedRange','insertionTarget','insertAfter','typeText',
                  'settle','validate','clickOptions','targets','freshIDs','checked','selftest','windowElement','root','windowNumber','userWindowLists','keepTaskWindow','targetWindow','windowAt','windowsAt','lease','unlock','submitReceipt','keysReachTask',
-                 'isShortcut','menuShortcut','webFocused']
+                 'isShortcut','menuShortcut','webFocused','wraps']
         matches = list(re.finditer(r'^    static func (\w+)\(', section, re.M))
         methods = ''.join(section[m.start():matches[i+1].start() if i+1<len(matches) else section.rfind('\n}')]
                           for i,m in enumerate(matches) if m[1] in names)
@@ -522,6 +523,24 @@ window.attrs.removeValue(forKey:"AXWindowNumber")
 cgWindows=[[kCGWindowOwnerPID as String:123,kCGWindowLayer as String:0,kCGWindowNumber as String:77,kCGWindowBounds as String:window.rect.dictionaryRepresentation]]
 precondition(Hands.targetWindow(app) == 77 && (try! Hands.capture(app)).windowID == "77", "input lost the window id that capture recovered")
 window.attrs["AXWindowNumber"]=NSNumber(value:42); cgWindows=[]
+// A web chat composer: one childless button around its hidden text box and a Dictate button. It is clicked, never pressed,
+// and typing into it is checked on screen by the caller.
+let composer=TestElement("AXButton","Message Attach file Send",CGRect(x:10,y:330,width:370,height:40)), dictate=TestElement("AXButton","Dictate",CGRect(x:330,y:338,width:30,height:24))
+composer.supported=["AXPress"]; window.add(composer); window.add(dictate)
+let composed=try! Hands.capture(app), node={ (label:String) in composed.nodes.first { $0.label == label }! }
+precondition(Hands.wraps(node("Message Attach file Send"),composer,composed), "a composer counted as a plain button")
+precondition(!Hands.wraps(node("Export"),export,composed) && !Hands.wraps(node("Dictate"),dictate,composed), "a plain button counted as a container")
+application.attrs[kAXFocusedUIElementAttribute]=composer; keysSent=[]
+try! Hands.typeText("hello world",node("Message Attach file Send"),composer,app,append:false,box:true)   // the screen check is the caller's
+precondition(keysSent == ["cmd+a","cmd+v"] && Clipboard.general.text == "Original clipboard", "the composer was not pasted into, or the clipboard was not given back")
+window.kids.removeLast(2); application.attrs[kAXFocusedUIElementAttribute]=name
+// Fastmail: a "Compose" link and an unnamed ▾ beside it. The ▾ borrows its neighbour's name, marked as borrowed, so "Compose" is the link.
+let split=TestElement("AXGroup","",CGRect(x:10,y:330,width:200,height:32)), compose=TestElement("AXLink","Compose",CGRect(x:10,y:330,width:117,height:32)), more=TestElement("AXButton","",CGRect(x:127,y:330,width:45,height:32))
+split.add(compose); split.add(more); window.add(split)
+let splitMap=try! Hands.capture(app)
+precondition(splitMap.nodes.contains { $0.role == "AXButton" && $0.label == "next to Compose" }, "the unnamed ▾ took its neighbour's name: \\(splitMap.nodes.map(\\.label))")
+precondition(try! Hands.resolve("Compose",map:splitMap,a:app).1 === compose, "Compose resolved to the ▾ beside it")
+window.kids.removeLast()
 let nestedText=String(repeating:"Deep document words. ",count:100)
 let level1=TestElement("AXGroup"), level2=TestElement("AXGroup"), level3=TestElement("AXGroup"), deepEditor=TestElement("AXTextArea","Deep document")
 deepEditor.attrs[kAXValueAttribute]=nestedText as NSString; level1.add(level2); level2.add(level3); level3.add(deepEditor)
@@ -615,10 +634,10 @@ name.attrs[kAXValueAttribute]="Question remains:\\nNext line remains." as NSStri
 precondition((try! Hands.insertAfter("Question remains:"," Answer.",app)).contains("Typed after"))
 precondition(name.attrs[kAXValueAttribute] as? String == "Question remains: Answer.\\nNext line remains.")
 do { _=try Hands.checked(["press","backspace"],try Hands.capture(app),app); preconditionFailure("Destructive key accepted in editable text") } catch {}
-let heldClipboard=try Hands.lease("clipboard.lock"), releaseAt=Date().addingTimeInterval(0.2)   // another Atticus process mid-paste
+let heldClipboard=try Hands.lease("clipboard.lock"), releaseAt=Date().addingTimeInterval(0.2)   // another Aurel process mid-paste
 DispatchQueue.global().asyncAfter(deadline:.now()+0.2){ Hands.unlock(heldClipboard) }
 refuseValueWrite=true; try Hands.typeText("Background paste",field,name,app,append:false)
-precondition(Date() >= releaseAt && Hands.leaseWaited, "a paste borrowed the clipboard while another Atticus process held it")
+precondition(Date() >= releaseAt && Hands.leaseWaited, "a paste borrowed the clipboard while another Aurel process held it")
 precondition(name.attrs[kAXValueAttribute] as? String == "Background paste" && Clipboard.general.text == "Original clipboard")
 precondition(keysSent.suffix(2) == ["cmd+a","cmd+v"])
 name.attrs[kAXValueAttribute]="Line one\\nLine two" as NSString; caret=CFRange(location:0,length:0); name.attrs[kAXSelectedTextRangeAttribute]=AXValueCreate(.cfRange,&caret)!

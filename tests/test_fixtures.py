@@ -1,8 +1,7 @@
-"""Run mock-bridge HTML fixtures in a temporary WebKit host, never the installed app."""
+"""Run the web.js HTML fixtures in a temporary WebKit host, never the installed app."""
 import functools
 import http.server
 from pathlib import Path
-import re
 import subprocess
 import sys
 import tempfile
@@ -14,22 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(sys.platform == 'darwin', 'macOS WebKit fixtures')
 class FixtureTests(unittest.TestCase):
-    def test_main_overlay_fixture(self):
-        self.check_fixtures(['ui'])
-
-    def test_timer_row_fixture(self):
-        self.check_fixtures(['timer_row'])
-
-    def test_box_contrast_fixture(self):
-        self.check_fixtures(['contrast'])
-
-    def test_mock_bridge_fixtures(self):
-        self.check_fixtures(['settings', 'worksheet', 'meeting', 'onboarding', 'web', 'agents', 'agent_done'])
-
-    def test_fixtures_inline_orbs_literally(self):
-        # A string replacement expands $' and $& inside orbs.js (its TeX table has '$'), so the page gets a broken module.
-        for page in ROOT.glob('tests/*.html'):
-            self.assertIsNone(re.search(r"replace\('/\*ORBS\*/',\s*[^\s(]", page.read_text()), page.name)
+    def test_web_control_fixtures(self):
+        self.check_fixtures(['worksheet', 'web'])   # ui/web.js, the part of Aurel that runs in the user's browser
 
     def check_fixtures(self, names):
         class Quiet(http.server.SimpleHTTPRequestHandler):
@@ -43,8 +28,8 @@ class FixtureTests(unittest.TestCase):
 import WebKit
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
-let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleDisplaySleepDisabled], reason: "Atticus isolated WebKit fixtures")
-let config = WKWebViewConfiguration(); config.websiteDataStore = .nonPersistent()   // a disk cache keyed by the reused port served the last run's ui/*.js
+let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleDisplaySleepDisabled], reason: "Aurel isolated WebKit fixtures")
+let config = WKWebViewConfiguration(); config.websiteDataStore = .nonPersistent()   // a disk cache keyed by the reused port served the last run's ui/web.js
 let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 900), configuration: config)
 let panel = NSPanel(contentRect: web.frame, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
 panel.contentView = web; panel.sharingType = .none
