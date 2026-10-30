@@ -40,6 +40,7 @@ PLACE, LOOK, SEARCH, READ, SHOW, REMEMBER, FORGET, TYPE, PLAY, QUEUE, ABOUT, SHO
 DRAW = shlex.quote(ME) + " --draw"
 MEMORY, RECENT = os.path.join(DIR, 'memory.md'), os.path.join(DIR, 'recent.jsonl')
 PREFS = os.path.join(DIR, 'settings.json')   # written by the Settings window
+os.environ.update(DISABLE_TELEMETRY='1', DISABLE_ERROR_REPORTING='1')   # every Claude Code run inherits these: no usage stats or crash reports to Anthropic
 
 
 # About the user. Only a short name/answer-style line is always sent; category facts are attached when their

@@ -130,6 +130,10 @@ class CrashHandlingTests(unittest.TestCase):
                 manager.read({'id': 'fixture'}, worker)
                 self.assertEqual(manager.revive.call_count, int(active))
 
+    def test_claude_code_runs_without_its_own_telemetry(self):
+        env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_API_KEY'}   # what mcp list, auth status and the workers start from
+        self.assertEqual((env['DISABLE_TELEMETRY'], env['DISABLE_ERROR_REPORTING']), ('1', '1'))
+
     def test_the_ask_log_and_its_folder_are_private_even_on_older_installs(self):
         with tempfile.TemporaryDirectory() as root, patch.object(aurel, 'DIR', root):
             os.chmod(root, 0o755); log = Path(root, 'log.jsonl'); log.write_text(''); log.chmod(0o644)
