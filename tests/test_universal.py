@@ -312,8 +312,10 @@ class UniversalTests(unittest.TestCase):
     def test_app_names_derive_from_installed_apps_and_ambiguous_names_defer(self):
         empty = Mock(returncode=0); empty.communicate.return_value = ('', '')
         with patch.object(aurel, '_APPS_CACHE', (0, set())), patch.object(aurel.os.path, 'isdir', return_value=True), \
-             patch.object(aurel.os, 'listdir', return_value=['Fixture Alpha Editor.app', 'Unfamiliar Editor.app']), \
+             patch.object(aurel.os, 'listdir', return_value=['Fixture Alpha Editor.app', 'Unfamiliar Editor.app', 'Bosk.app', 'Brave Browser.app']), \
              patch.object(aurel.subprocess, 'Popen', return_value=empty):
+            self.assertEqual(aurel.app_named('Bosk browser'), 'Bosk')   # what the user said, not the app's name
+            self.assertEqual(aurel.app_named('Brave Browser'), 'Brave Browser')
             self.assertEqual(aurel.app_named('fa editor'), 'Fixture Alpha Editor')
             self.assertEqual(aurel.app_named('fixturealphaeditor'), 'Fixture Alpha Editor')
             self.assertIsNone(aurel.app_named('editor'))

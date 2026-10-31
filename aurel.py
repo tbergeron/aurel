@@ -1319,6 +1319,8 @@ def place(proc, where='full', screen='current', title=''):
                 if tries < 3:
                     time.sleep(0.4)
     else:
+        named = app_named(proc)   # the model wrote what the user said ("Bosk browser"), not the process name
+        if named and named != proc: return place(named, 'fullscreen' if native else where, screen, title)
         return f'no window found for "{proc}" {title}'
     scr = screens()
     n, x, y, w, h, _ = next((s for s in scr if pick(s)), scr[0])
@@ -1761,6 +1763,7 @@ def app_named(words, fuzzy=False):
     matches = [a for a in apps if key(a.split()[-1]) == key(w) or key(''.join(p[0] for p in a.split()[:-1]) + a.split()[-1]) == key(w)]
     if len(matches) == 1: return matches[0]
     # fuzzy (tell_app): misheard ("tell mules" = Muse), a running app a letter or two off, only when one is clearly closest
+    if w.endswith(' browser'): return app_named(w.removesuffix(' browser'), fuzzy)   # "Bosk browser" = Bosk; "Brave Browser" matched above
     if not fuzzy or len(key(w)) < 4 or matches: return None
     near = sorted((edits(key(w), key(a)), a) for a in running_apps())
     most = 1 if len(key(w)) < 5 else 2
@@ -2892,6 +2895,7 @@ def web(cmd, n='', text='', app=None, fresh=False, want='', page=None):
             with open(path) as f: prior = json.load(f)
             if isinstance(prior.get('app'), str): app = prior['app']
         except (OSError,ValueError,AttributeError): pass
+    app = app or running_app('https://')   # an Agents-window task has no front app: the default browser
     if not app:
         return 'No browser is open.'
     adapter = browser_adapter(app)
@@ -4073,7 +4077,7 @@ def update_chats(turn=None, previous=None, identifier=None, title=None):
             if chats and previous and chats[0]['turns'][-1]['t'] == previous['t']:
                 chats[0]['turns'].append(turn)
             else:
-                chats.insert(0, {'id': uuid.uuid4().hex, 'title': ' '.join(turn['q'].split()[:8]), 'created': turn['t'], 'turns': [turn]})
+                chats.insert(0, {'id': uuid.uuid4().hex, 'title': ' '.join(turn['q'].split()[:8]) + ('…' if len(turn['q'].split()) > 8 else ''), 'created': turn['t'], 'turns': [turn]})
             chats[0]['turns'] = chats[0]['turns'][-50:]
         else:
             chat = next((c for c in chats if c['id'] == identifier), None)
