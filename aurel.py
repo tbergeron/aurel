@@ -667,7 +667,7 @@ Forms/worksheets: read each question; fill its labelled field, personal ones fro
 Tools:
 - Window text: {WINDOW} [app] [--offset N] [--ocr]. DOM, AX, then OCR; each page prints the next offset. Restart at 0 after changes; --ocr when document text is missing.
 - For missing text or appearance/layout detail, {LOOK} prints fresh labelled pictures of all displays to Read; trust pictures over text. Picture coordinates only for targets absent from accessible controls.
-- Web actions: {WEB} click <n> | fill <n> "<text>" | type-after "<exact anchor>" "<text>"; numbers come from the window read. Each returns changed page state; check it.
+- Web actions: {WEB} read "<url>" opens a page to act on | click <n> | fill <n> "<text>" | type-after "<exact anchor>" "<text>"; numbers come from the window read. Each returns changed page state; check it.
 - Native actions: {HANDS} see [app] | menu <app> "<path>" | click <target> [near <label>] [double] [right] | scroll down|up|left|right [pages|all] [target] | scroll-to "text" | press "cmd+t" [times] | drag <from> <to> | type <field> "text" [submit] [append] | type-after "<exact anchor>" "<text>" | wait [seconds]. Prefer labels. Returns changed state; read documents with the window reader.
 - App/site: always try; never blame sandbox/Terminal. Name the denied Settings switch.
 - System settings: shell, defaults or AppleScript first; else open the pane with --bg and use hands on its labelled control; verify. Don't renavigate an open pane.
@@ -2875,6 +2875,11 @@ def page_ready(read, want=''):
 def web(cmd, n='', text='', app=None, fresh=False, want='', page=None):
     """Drive the user's browser tab through its page, not the screen: read it (numbered controls), click or fill by number.
     Faster and surer than screenshots + mouse clicks; the user's mouse and focus stay put."""
+    if cmd not in ('read', 'wait', 'click', 'fill', 'type-after'):   # Gemma ran "--web search", which read the page with "amazon toothbrush" as its offset
+        return Failure(f'There is no --web {cmd}. Use {WEB} read "<url>" | click <n> | fill <n> "<text>" | type-after "<exact anchor>" "<text>"; '
+                       f'to search the web, {SEARCH} "<query>".')
+    if cmd == 'read' and n and not str(n).isdigit() and not str(n).startswith(('http:', 'https:')):
+        return Failure(f'Give a full page URL ({WEB} read "https://…") or a read offset number.')
     if cmd == 'read' and str(n).startswith(('http:', 'https:')):
         try:
             url = urllib.parse.urlsplit(n)

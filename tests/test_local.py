@@ -198,6 +198,8 @@ class LocalTests(unittest.TestCase):
         for replies, outputs, want, ok in (
                 ([call(click), call(click), claim], [refused, refused], "That didn't work: That page is in the user's own window; agents only read it.", False),   # same failure twice: stopped
                 ([call(click), call(typed), claim], [refused, refused], "That didn't work: That page is in the user's own window; agents only read it.", False),   # all failed: no claim
+                ([call(click), call(f'{aurel.ME} --web search "amazon toothbrush"'), {'content': 'I found search results for "amazon toothbrush". Which result would you like to visit?'}],
+                 [refused, Mock(stdout=f'There is no --web search. Use {aurel.ME} --web read "<url>".', stderr='', returncode=1)], "That didn't work: There is no --web search.", False),
                 ([call(click), {'content': 'I could not click it: that page is in your window.'}], [refused], 'I could not click it', True),   # an admission stays
                 ([call(click), call('echo done'), claim], [refused, Mock(stdout='done', stderr='', returncode=0)], claim['content'], True),   # something worked
                 ([call('pgrep -x Spotify'), {'content': 'Spotify is not running.'}], [Mock(stdout='', stderr='', returncode=1)], 'Spotify is not running.', True)):   # a shell exit 1 is an answer
@@ -209,6 +211,14 @@ class LocalTests(unittest.TestCase):
                 reply, _ = aurel.local_loop(messages, aurel.time.monotonic() + 60)
             self.assertIn(want, reply); self.assertNotIn(aurel.ME, reply); self.assertEqual(aurel.run.ok, ok, want)
             self.assertEqual(messages[-1], {'role': 'assistant', 'content': reply})   # a follow-up sees what the user was told
+
+    def test_web_rejects_made_up_commands_and_bare_sites_instead_of_reading_the_page(self):
+        # "--web search" read the user's page with the words as an offset and exited 0, so the loop let "I found results" through.
+        with patch.object(aurel, 'browser_adapter') as adapter:
+            for args in (('search', 'amazon toothbrush'), ('open', 'https://amazon.ca'), ('read', 'amazon.ca'), ('read', '-1')):
+                out = aurel.web(*args)
+                self.assertIsInstance(out, aurel.Failure, args); self.assertIn('read "', out, args)
+            adapter.assert_not_called()   # never touched a browser
 
     def test_step_loop_without_the_model_asks_for_setup(self):
         with patch.object(aurel, 'llm_url', return_value=''), patch.object(aurel, 'say') as say, patch.dict(os.environ, {'AUREL_LLM_READY': ''}):
