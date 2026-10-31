@@ -712,6 +712,15 @@ After failure, correction or a repeated ask, end [tip <exact words the user can 
 READ_ALOUD = f"""
 Read aloud from an app ("read Muse's last reply", "read me what Slack says"): {WINDOW} "<app>", then --offset to the last page for the newest text.
 Reply [aloud] then only that passage, word for word: no intro, summary or edits; may exceed reply limit. Not found: say so, no tag."""
+READ_OUT = re.compile(r"(?:(?:well|so|just|now|go ahead and)\s+)*read\b(?!\s+up\b)")   # "read it", "well, read the last message"; "read up on" is research
+
+
+def asks_aloud(task):
+    """The user asked to hear something read: spoken even with Read answers aloud off, whichever path answers."""
+    t = plain(task)
+    return bool(READ_OUT.match(t) or READ_ALOUD_ASK.search(t))
+
+
 READ_ALOUD_ASK = re.compile(r"\bread\b.*\b(aloud|out loud)\b|\bread (me )?\w[\w .-]{0,30}'s\b|\bread me what\b", re.I)   # ponytail: wording heuristic for Local's handoff; a router call if it misses
 
 # Ask me when unsure (always on): a choices card in the box instead of a guess
@@ -2294,6 +2303,7 @@ def read_last(name):
     trace('read last', app=app, found=bool(reply), how=how, why=why)
     if reply:
         fast.aloud = True
+        Path(CHAT).write_text(app)   # "reply …" next answers this app
         return '\n'.join(reply)
     return None if client() != 'local' or pref('readWindows', False) else f"I couldn't find {app}'s last reply."
 
@@ -2320,7 +2330,27 @@ def tell_app(text):
     said = re.sub(r"(?i)[,.]?\s+(?:um+|uh+)[.!?]?$", '', said).strip()   # "… analysis. Um"
     if not said: return None
     trace('tell', app=app, chars=len(said))
-    return route_line(f'type "{said}" in {app} send', os.environ.get('AUREL_FRONT') or front()[0])
+    sent = route_line(f'type "{said}" in {app} send', os.environ.get('AUREL_FRONT') or front()[0])
+    if sent: Path(CHAT).write_text(app)
+    return sent
+
+
+CHAT = os.path.join(DIR, 'last_chat')   # the app the user last read or told something: what a bare "reply …" answers
+
+
+def reply_app(text):
+    """"Reply, I'll be there" right after reading or telling an app: sends "I'll be there" to that app, no AI. Its open conversation
+    is the one just read or told. None (the full ask) when no read or tell happened in the last 10 minutes."""
+    m = re.match(r"(?i)^(?:(?:hey|ok|okay|aurel|so|well|and|um|uh)[,.]?\s+)*(?:reply|respond)(?:\s+(?:to (?:it|that|him|her|them)|back))?"
+                 r"(?:\s+(?:with|saying|and say|that))?[,:.]?\s+(.+)$", text.strip())
+    try: app, age = Path(CHAT).read_text().strip(), time.time() - os.path.getmtime(CHAT)
+    except OSError: return None
+    if not m or not app or age > 600: return None   # ponytail: a fixed 10 minutes; tie it to the box's conversation if that misfires
+    said = re.sub(r"(?i)[,.]?\s+(?:um+|uh+)[.!?]?$", '', m[1]).strip()
+    trace('reply', app=app, chars=len(said))
+    sent = route_line(f'type "{said}" in {app} send', os.environ.get('AUREL_FRONT') or front()[0])
+    if sent: Path(CHAT).touch()
+    return sent
 
 
 def fast(text):
@@ -2359,6 +2389,8 @@ def fast(text):
         return None if os.environ.get('AUREL_LIVE') == '1' else read_last(m['a'] or m['b'])
     if TELL.match(t):
         return None if os.environ.get('AUREL_LIVE') == '1' else tell_app(text)   # a half-said message must not go out
+    if re.match(r'(?:well |so |and )?(?:reply|respond)\b', t):
+        return None if os.environ.get('AUREL_LIVE') == '1' else reply_app(text)
     m = re.fullmatch(r'(?:close|quit) (.+)', t)
     app = app_named(m[1]) if m and not DEICTIC.search(m[1]) else None
     if app:
@@ -7291,7 +7323,7 @@ def main():
         remember_turn(task, quick, getattr(fast, 'shortcut', None))
         log_turn(task, quick, t, model='instant',
                  path='shortcut' if getattr(fast, 'shortcut', None) else 'instant', attempt_usd=[])
-        if getattr(fast, 'aloud', False) and os.environ.get('AUREL_UI') == '1': print('🔊', flush=True)   # another app's words: spoken even with Read answers aloud off
+        if (getattr(fast, 'aloud', False) or asks_aloud(task)) and os.environ.get('AUREL_UI') == '1': print('🔊', flush=True)   # another app's words: spoken even with Read answers aloud off
         return say('!' if quick.startswith('The user said no.') else '✓', quick)
     claude_reads = pref('readWindows', False) and READ_ALOUD_ASK.search(confirmed_task)   # the fast read failed: straight to Claude, no router call
     routed = client() == 'local' and not quick and not claude_reads and not (marked or done or drawn or selection_context()) and local_route(confirmed_task)
@@ -7467,7 +7499,7 @@ def main():
     restore_focus(app, task, run.ran)
     if replacement and run.ok and os.environ.get('AUREL_UI') == '1':
         print('↺ ' + json.dumps({'t': '' if replacement == 'delete' else reply, 'mode': replacement}, ensure_ascii=False), flush=True)
-    if aloud and run.ok and os.environ.get('AUREL_UI') == '1':
+    if (aloud or asks_aloud(TURN.get('task', task))) and run.ok and os.environ.get('AUREL_UI') == '1':
         print('🔊', flush=True)   # the box reads the next answer aloud even with Read answers aloud off
     say('✓' if run.ok else '!', guide_reply(getattr(run, 'observed', []), reply) if run.ok and not replacement else reply)
     receipt = memory_receipt(remembered)   # remembered or forgot something: one row under the answer that opens Settings → Memory there

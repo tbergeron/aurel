@@ -85,10 +85,35 @@ class LocalTests(unittest.TestCase):
                                     ('Tell Muse I am here And ready', 'type "I am here and ready" in Muse send', False),
                                     ('open Muse and say hi', 'type "hi" in Muse send', True), ('move Chrome and Safari left', 'move Chrome to left', True)]:
             self.assertEqual(aurel.several_steps(task, line), several, task)
+        for task, aloud in [('Well, read it.', True), ('Read the last message.', True), ("Read Musist's last message", True),
+                            ('Can you read me this email?', True), ('read this page out loud', True), ('Hey Aurel, read it', True),
+                            ('read up on solar panels', False), ('what did Muse say', False), ('open the reading list', False),
+                            ('thread the needle', False), ('summarize what I read yesterday', False)]:
+            self.assertEqual(aurel.asks_aloud(task), aloud, task)
         for task, line, echo in [('Well, read it.', 'type "Well, read it." in Muse send', True), ('read it', 'type "Read it"', True),
                                  ('say hello there', 'type "hello there"', False), ('Tell Muse hello world', 'type "hello world" in Muse send', False),
                                  ('read it', 'open Muse', False)]:
             self.assertEqual(aurel.echoes(task, line), echo, task)
+
+    def test_reply_goes_to_the_app_just_read_or_told(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(aurel, 'CHAT', os.path.join(root, 'last_chat')), \
+             patch.object(aurel, 'front', return_value=('Aurel', '')), patch.object(aurel, 'trace'), \
+             patch.object(aurel, 'route_line', return_value='Sent.') as route:
+            self.assertIsNone(aurel.fast('Reply, I am on my way.'))   # nothing read or told yet: the full ask
+            route.assert_not_called()
+            Path(aurel.CHAT).write_text('Muse')
+            for said, words in [("Reply, I gotta update you about all the changes I've put in the game. It's incredible.",
+                                  "I gotta update you about all the changes I've put in the game. It's incredible."),
+                                 ('respond with sounds good', 'sounds good'), ('Reply to it saying Thanks, um', 'Thanks')]:
+                self.assertEqual(aurel.fast(said), 'Sent.', said)
+                route.assert_called_with(f'type "{words}" in Muse send', 'Aurel')
+            os.utime(aurel.CHAT, (0, 0))   # long ago: a reply to what?
+            route.reset_mock()
+            self.assertIsNone(aurel.fast('Reply, hi'))
+            route.assert_not_called()
+        with patch.dict(os.environ, {'AUREL_LIVE': '1'}), patch.object(aurel, 'route_line') as route:
+            self.assertIsNone(aurel.fast('Reply, I gotta'))   # half-said: never sent
+            route.assert_not_called()
 
     def test_router_never_types_into_the_front_app_for_an_app_it_cannot_find(self):
         with patch.object(aurel, 'fast') as fast, patch.object(aurel, 'app_named', return_value=None), \
