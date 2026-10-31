@@ -85,6 +85,10 @@ class LocalTests(unittest.TestCase):
                                     ('Tell Muse I am here And ready', 'type "I am here and ready" in Muse send', False),
                                     ('open Muse and say hi', 'type "hi" in Muse send', True), ('move Chrome and Safari left', 'move Chrome to left', True)]:
             self.assertEqual(aurel.several_steps(task, line), several, task)
+        for task, line, echo in [('Well, read it.', 'type "Well, read it." in Muse send', True), ('read it', 'type "Read it"', True),
+                                 ('say hello there', 'type "hello there"', False), ('Tell Muse hello world', 'type "hello world" in Muse send', False),
+                                 ('read it', 'open Muse', False)]:
+            self.assertEqual(aurel.echoes(task, line), echo, task)
 
     def test_router_never_types_into_the_front_app_for_an_app_it_cannot_find(self):
         with patch.object(aurel, 'fast') as fast, patch.object(aurel, 'app_named', return_value=None), \

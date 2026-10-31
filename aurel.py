@@ -598,6 +598,13 @@ def several_steps(task, line):
     return bool(re.search(r'\b(?:and|then|also|after that|afterwards)\b', rest, re.I))
 
 
+def echoes(task, line):
+    """The router typing the whole request back ("Well, read it." -> type "Well, read it." in Muse send) is a request it
+    didn't understand, not words to type: "say hello there" types "hello there", never all of it."""
+    typed = re.match(r'type "(.+?)"', line)
+    return bool(typed) and plain(typed[1]) == plain(task)
+
+
 def message_box(app):
     """The map number of the box to type into in app: its lowest text field, else a chat composer (one control drawn around
     others, like Muse's message bar, whose text box accessibility can't see; hands clicks into it). None when there is neither."""
@@ -623,7 +630,8 @@ def local_route(task):
         return None
     if line == 'ai': trace('router', line='ai', front=app)
     if line == 'ai' or not wait_commit(): return None
-    skip = 'send elsewhere' if quick_send_elsewhere(task, line) else 'several steps' if several_steps(task, line) else ''
+    skip = ('send elsewhere' if quick_send_elsewhere(task, line) else 'several steps' if several_steps(task, line) else
+            'echoed request' if echoes(task, line) else '')
     trace('router', line=line, front=app, skipped=skip)
     if skip: return None
     reply = route_line(line, app)
@@ -1139,7 +1147,7 @@ def asks_front(task):
     return not re.search(r'\b(background|behind)\b', task, re.I) and any(
         (m[1].lower() != 'open' or re.match(r'\s+\w', task[m.end():]) and not re.search(r'\b(is|are|was|were|be|already)\s*$', task[:m.start()], re.I)) and
         not re.search(r"\b(don.t|do not|never|without|avoid|no need to)\b[^,;.]*$", task[:m.start()].rsplit(' but ', 1)[-1], re.I)
-        for m in re.finditer(r'\b(open|show|switch to|focus|bring up|bring .{0,40}forward|full ?screen|foreground|in front)\b', task, re.I))
+        for m in re.finditer(r'\b(open|show|switch (?:back )?to|focus|bring up|bring .{0,40}forward|full ?screen|foreground|in front)\b', task, re.I))
 
 
 def preview_app(app, action='work', title='', directory=None, frame=None):
@@ -1713,12 +1721,17 @@ WORKED = os.path.join(DIR, 'worked.json')   # the window the last task worked in
 _APPS_CACHE = (0.0, set())
 
 
+def app_folders():
+    """The apps in the usual folders: a few ms, where Spotlight's full list takes longer."""
+    return {f[:-4] for d in ('/Applications', '/System/Applications', '/System/Applications/Utilities', '/System/Library/CoreServices', HOME + '/Applications')
+            if os.path.isdir(d) for f in os.listdir(d) if f.endswith('.app')}
+
+
 def installed_apps():
     global _APPS_CACHE
     if _APPS_CACHE[0] and time.monotonic() - _APPS_CACHE[0] < 3600:
         return _APPS_CACHE[1]
-    fallback = {f[:-4] for d in ('/Applications', '/System/Applications', '/System/Applications/Utilities', '/System/Library/CoreServices', HOME + '/Applications')
-                if os.path.isdir(d) for f in os.listdir(d) if f.endswith('.app')}
+    fallback = app_folders()
     try:
         search = subprocess.Popen(['mdfind', 'kMDItemContentType == "com.apple.application-bundle"'],
                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
@@ -1752,6 +1765,28 @@ def app_named(words, fuzzy=False):
     near = sorted((edits(key(w), key(a)), a) for a in running_apps())
     most = 1 if len(key(w)) < 5 else 2
     return near[0][1] if near and near[0][0] <= most and (len(near) == 1 or near[1][0] > near[0][0]) else None
+
+
+@lru_cache(maxsize=1)
+def english():
+    try:
+        with open('/usr/share/dict/words') as f: return frozenset(w.strip().lower() for w in f)
+    except OSError: return frozenset()
+
+
+def heard_names(task):
+    """Parakeet can't be told the user's names: a word it misheard ("switch to mubes") snaps to the one installed app or Dictionary
+    word clearly closest, same first letter, a letter or two off. English words ("mules", "slack") stay as said."""
+    english_word = lambda w: any(x in english() for x in (w, w[:-1] if w.endswith('s') else w, w[:-2] if w.endswith('es') else w))
+    heard = {w for w in re.findall(r'[A-Za-z]{4,}', task) if not english_word(w.lower())}
+    if not heard: return task
+    names = [n for n in [*app_folders(), *dictate_words()] if re.fullmatch(r'[A-Za-z]+', n)]
+    for w in heard:
+        near = sorted((edits(w.lower(), n.lower()), n) for n in names if n[0].lower() == w[0].lower())
+        if not near or near[0][0] == 0 or near[0][0] > (1 if len(w) < 5 else 2) or len(near) > 1 and near[1][0] == near[0][0]: continue
+        task = re.sub(rf'\b{w}\b', near[0][1], task)
+        trace('heard name', heard=w, name=near[0][1])
+    return task
 
 
 def edits(a, b):
@@ -2366,7 +2401,7 @@ def fast(text):
         reply = queue(name)
         if reply.startswith('Added '): fast.cmds = [f'{QUEUE} {shlex.quote(name)}']
         return reply
-    m = re.fullmatch(r'(?:open(?: up)?|launch|start|pull up|bring up|focus(?: on)?|switch to|go to)\s+(?!up$)(.+?)'
+    m = re.fullmatch(r'(?:open(?: up)?|launch|start|pull up|bring up|focus(?: on)?|(?:switch|go)(?: back)? to)\s+(?!up$)(.+?)'
                      r'(?:\s+(?:on|to|in|at)\s+(?:the\s+|my\s+)?(left|right|full ?screen|center|middle|laptop|monitor)(?:\s+(?:side|half|screen))?)?', t)
     if m and m[2]:   # "open Chrome on my monitor": open it, then the move command below
         if not asks_front(text): free_focus(user=True)   # the inner "open" skips this, as if allow_focus had seen these words
@@ -7208,6 +7243,8 @@ def main():
             card = str(request.get('agentCard') or '')
         else: front_now, _, task = line.rpartition('\t')
         os.environ['AUREL_FRONT'] = front_now or os.environ.get('AUREL_FRONT', '')
+        task = heard_names(task)
+        if remaining is not None: remaining = heard_names(remaining)
     task = task if args == ['--wait'] else ' '.join(a for a in args if a != '--plan') or ask()
     if not task:
         return warm and stop_claude(warm)

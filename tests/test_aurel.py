@@ -720,6 +720,25 @@ print(json.dumps(aurel.look(cleanup=sys.argv[3] != 'standalone')))
             self.assertEqual(aurel.ask_user({'q': 'Send this?', 'cmd': 'fixture'}, 60), 'y')
         self.assertEqual(naps, [.02])
 
+    def test_misheard_words_snap_to_app_names(self):
+        with patch.object(aurel, 'app_folders', return_value={'Muse', 'Music', 'Messages', 'Google Chrome'}), \
+             patch.object(aurel, 'dictate_words', return_value=['Kubernetes']):
+            for heard, said in [('switch to mubes', 'switch to Muse'), ("read mubes's last message", "read Muse's last message"),
+                                ('restart Kubernetis', 'restart Kubernetes'),
+                                ('the mules are here', 'the mules are here'),   # English words stay
+                                ('switch to Muse', 'switch to Muse'), ('open Mesages', 'open Messages'),
+                                ('switch to mxyzq', 'switch to mxyzq')]:   # nothing close
+                self.assertEqual(aurel.heard_names(heard), said, heard)
+
+    def test_switch_back_opens_the_app_with_no_ai(self):
+        for ask in ('Switch back to Claude.', 'go back to Claude'):
+            with patch.object(aurel, 'skills', return_value={}), patch.object(aurel, 'app_named', return_value='Claude'), \
+                 patch.object(aurel, 'free_focus'), patch.object(aurel, 'LAST', os.devnull), \
+                 patch.object(aurel.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                self.assertEqual(aurel.fast(ask), 'Opened Claude.', ask)
+                run.assert_called_once_with(['open', '-a', 'Claude'])
+        self.assertTrue(aurel.asks_front('Switch back to Claude.'))
+
     def test_live_does_not_replay_learned_shell(self):
         with patch.dict(os.environ, {'AUREL_LIVE': '1'}), \
              patch.object(aurel, 'skills', return_value={k: {'cmds': ['echo private'], 'reply': 'Done'} for k in ['daily mode', 'open spotify']}), \

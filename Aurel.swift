@@ -6320,7 +6320,7 @@ var leader: NSPanel?
 func relaunchSoon() {
     let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/sh")
     p.arguments = ProcessInfo.processInfo.environment["AUREL_DIR"] != nil ? ["-c", "sleep 1; exec \"$0\" -onboarded YES", CommandLine.arguments[0]] :
-                  ["-c", "sleep 1; launchctl bootout gui/\(getuid())/com.aurel.app >/dev/null 2>&1; sleep 1; launchctl bootstrap gui/\(getuid()) \"$1\" 2>/dev/null || open \"$0\"",
+                  ["-c", "sleep 1; launchctl bootout gui/\(getuid())/com.aurel.app >/dev/null 2>&1; sleep 1; launchctl bootstrap gui/\(getuid()) \"$1\" 2>/dev/null || launchctl print gui/\(getuid())/com.aurel.app >/dev/null 2>&1 || open \"$0\"",
                    Bundle.main.bundlePath, NSHomeDirectory() + "/Library/LaunchAgents/com.aurel.app.plist"]
     try? p.run()
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }

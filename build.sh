@@ -89,7 +89,8 @@ P
 launchctl bootout gui/$(id -u)/com.aurel.app 2>/dev/null || true
 pkill -f "$APP/Contents/MacOS/Aurel$" 2>/dev/null && sleep 1   # stop a copy opened by hand too
 # bootout can return before the job has finished unloading.
-launchctl bootstrap gui/$(id -u) "$AGENT" 2>/dev/null || { sleep 1; launchctl bootstrap gui/$(id -u) "$AGENT" 2>/dev/null || {
+# A bootstrap can fail yet still load the job: opening it too starts a second copy that wins the lock and logs nowhere.
+launchctl bootstrap gui/$(id -u) "$AGENT" 2>/dev/null || { sleep 1; launchctl bootstrap gui/$(id -u) "$AGENT" 2>/dev/null || launchctl print gui/$(id -u)/com.aurel.app >/dev/null 2>&1 || {
   echo "Could not add Aurel to Login Items; opening it directly instead."
   open "$APP"
 }; }
