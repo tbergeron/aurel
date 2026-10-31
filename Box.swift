@@ -7,8 +7,8 @@ import SwiftUI
 // MARK: - Tokens (always dark)
 
 enum BX {
-    static let fg = Color(hex: 0xf5f5f7), fg2 = Color(hex: 0xc7c7cc), accent = Color(hex: 0x006bd6), blue = Color(hex: 0x0a84ff)
-    static let green = Color(hex: 0x30d158), link = Color(hex: 0x64d2ff), orange = Color(hex: 0xff9f0a), red = Color(hex: 0xff453a)
+    static let fg = Color(hex: 0xf5f5f7), fg2 = Color(hex: 0xe8e8ea), accent = Color(hex: 0x006bd6), blue = Color(hex: 0x0a84ff)
+    static let green = Color(hex: 0x30d158), link = Color(hex: 0xc6eeff), orange = Color(hex: 0xff9f0a), red = Color(hex: 0xff453a)
     static func ease(_ s: Double, delay: Double = 0) -> Animation? { css(0.2, 0.8, 0.2, 1, s, delay: delay) }
     static func spring(_ s: Double, delay: Double = 0) -> Animation? { css(0.34, 1.56, 0.64, 1, s, delay: delay) }
 }
@@ -139,7 +139,7 @@ final class BoxModel: ObservableObject {
     var listening = false, working = false, hover = false, coachPending = false, atBottom = true
     var targets: [TargetEntry] = []
     var rects: [String: CGRect] = [:]
-    var scrollTo: ((UUID?, Bool) -> Void)?   // a turn part to keep in view, or nil: the bottom
+    var scrollTo: (() -> Void)?   // to the bottom: the newest line stays in view unless the user scrolled up
     var lastSize: [CGFloat] = []
     var miniTimer: DispatchWorkItem?, miniEnd = false
     var defaultEnabled = false
@@ -389,7 +389,6 @@ final class BoxModel: ObservableObject {
     func line(_ l: String) {
         guard let tag = l.first else { return }
         let s = l.count > 2 ? String(l.dropFirst(2)) : ""
-        var top: UUID? = nil
         if tag != "…" && tag != "✓" { unstream() }
         switch tag {
         case "…":
@@ -400,7 +399,6 @@ final class BoxModel: ObservableObject {
             if let r = text.range(of: #"\S+$"#, options: .regularExpression) { text.removeSubrange(r) }   // its last word may still be arriving
             let keep = turns[i].aKind == "streaming"
             setAnswer(i, shutAnswer(text), keep: keep, streaming: true); turns[i].aKind = "streaming"
-            top = answerID(i)
         case "▣": if let j = try? JSONSerialization.jsonObject(with: Data(s.utf8)) as? [String: Any] { miniUpdate(j) }
         case "@": miniPoint(s)
         case "·": setStatus(s, true)
@@ -427,7 +425,6 @@ final class BoxModel: ObservableObject {
                 if shown { turns[i].aKind = "normal" }
                 turns[i].aAnswer = s
                 if turns[i].aKind != "draft" { setAnswer(i, s, keep: shown) } else { turns[i].aText = s }
-                if shown { top = answerID(i) }
             }
             setState("breathing")
             for i in turns.indices { turns[i].redo = false }
@@ -446,7 +443,7 @@ final class BoxModel: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 9) { self.goneTip(id) }   // never sticks around
         default: break
         }
-        if let top, atBottom { scrollTo?(top, true) } else if top == nil && atBottom { scrollTo?(nil, false) }
+        if atBottom { scrollTo?() }
     }
     func answerID(_ i: Int) -> UUID? { turns[i].parts.first { if case .answer = $0 { return true }; return false }?.id }
     func setAnswer(_ i: Int, _ text: String, keep: Bool, streaming: Bool = false) {
@@ -715,14 +712,6 @@ final class BoxModel: ObservableObject {
 
 // MARK: - Views
 
-private struct Glass: View {   // #x, #point, #mic: a glass bead
-    var hot = false; var strong = 0.26
-    var body: some View {
-        Circle().fill(RadialGradient(colors: [.white(hot ? 0.4 : strong), .white(hot ? 0.12 : 0.07)], center: UnitPoint(x: 0.3, y: 0.15), startRadius: 0, endRadius: 40))
-            .overlay(Circle().strokeBorder(Color.white(0.3), lineWidth: 0.5))
-            .shadow(color: .black(0.22), radius: 3, y: 2)
-    }
-}
 
 struct BoxView: View {
     @ObservedObject var m: BoxModel
@@ -806,12 +795,9 @@ private struct Head: View {
                     .contentShape(Rectangle()).boxTarget("fold", kind: .button { m.foldBox(!m.folded) }).help(m.folded ? "Expand answer" : "Minimize answer")
             }
             let x = m.hot.contains("x")
-            ZStack {
-                Circle().fill(RadialGradient(colors: [.white(x ? 0.5 : 0.30), .white(x ? 0.14 : 0.07), .white(x ? 0.06 : 0.03)], center: UnitPoint(x: 0.3, y: 0.15), startRadius: 0, endRadius: 26))
-                    .overlay(Circle().strokeBorder(Color.white(x ? 0.55 : 0.35), lineWidth: 0.5)).shadow(color: .black(x ? 0.35 : 0.22), radius: x ? 7 : 3, y: x ? 4 : 2)
-                Icon(paths: ["M1 1L9 9M9 1L1 9"], box: 10, stroke: 1.6, color: .white).frame(width: 8, height: 8).rotationEffect(.degrees(x ? 90 : 0))
-            }
-            .frame(width: 22, height: 22).opacity(x ? 1 : 0.7).scaleEffect(x ? 1.28 : 1).animation(BX.spring(0.45), value: x)
+            Icon(paths: ["M1 1L9 9M9 1L1 9"], box: 10, stroke: 1.6, color: .white(x ? 1 : 0.75)).frame(width: 8, height: 8).rotationEffect(.degrees(x ? 90 : 0))
+                .frame(width: 22, height: 22).glassEffect(x ? .regular.tint(.white(0.15)) : .regular, in: .circle)
+                .scaleEffect(x ? 1.28 : 1).animation(BX.spring(0.45), value: x)
         }
         .frame(height: 44)
     }
@@ -822,7 +808,7 @@ private struct StatusLine: View {   // #status: one line, the live kind shimmeri
     var body: some View {
         let s = m.status.isEmpty && m.folded ? "Done" : m.status
         Group {
-            if m.statusLive && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            if m.statusLive && m.visible && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {   // a hidden box's shimmer still ticks every frame
                 TimelineView(.animation) { t in
                     let p = t.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.5) / 1.5
                     Text(s).font(cssFont(12.5)).lineLimit(1).truncationMode(.tail)
@@ -868,6 +854,7 @@ private struct Thread: View {
                     .padding(.top, 2)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentH = $0 }
                 }
+                .onChange(of: contentH) { _, _ in if m.atBottom && !userScrolling { proxy.scrollTo("end", anchor: .bottom) } }   // after layout: new lines are in view, not the old bottom
                 .frame(height: shownH)
                 .scrollPosition($position)
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in m.threadY = y }
@@ -880,12 +867,7 @@ private struct Thread: View {
                 .report("thread")
                 .onAppear {
                     if let y = m.restoreY { m.restoreY = nil; DispatchQueue.main.async { position.scrollTo(y: y) } }
-                    m.scrollTo = { id, top in
-                        if let id, top {
-                            proxy.scrollTo(id, anchor: .top)
-                            if contentH > min(m.threadMax, max(60, m.screenHeight - 140)) + 1 { m.atBottom = false }   // a full box stops at the answer's start; the user scrolls on from there
-                        } else { proxy.scrollTo("end", anchor: .bottom) }
-                    }
+                    m.scrollTo = { proxy.scrollTo("end", anchor: .bottom) }
                 }
             }
         }
@@ -1466,8 +1448,8 @@ private struct Composer: View {   // the typing box: grows in on hover (or the s
             ZStack(alignment: .trailing) {
                 TextField("", text: $m.ask, prompt: Text("Ask Aurel…").foregroundColor(BX.fg2)).textFieldStyle(.plain).font(cssFont(13.5)).foregroundColor(.white)
                     .focused($focused).padding(.horizontal, 13).frame(height: 34)
-                    .background(Capsule().fill(Color.white(focused ? 0.12 : 0.08))).overlay(Capsule().strokeBorder(Color.white(focused ? 0.22 : 0.14), lineWidth: 0.5))
-                    .background(Capsule().inset(by: -3).fill(focused ? Color.rgba(10, 132, 255, 0.35) : .clear))
+                    .background(Capsule().fill(Color.white(focused ? 0.1 : 0.08))).overlay(Capsule().strokeBorder(Color.white(0.14), lineWidth: 0.5))
+                    .overlay(Capsule().inset(by: -3).strokeBorder(Color.accentColor.opacity(focused ? 0.6 : 0), lineWidth: 3))   // the Mac focus ring, in the user's accent color
                     .opacity(m.pickRow ? 0 : 1).scaleEffect(m.pickRow ? 0.97 : 1, anchor: .leading)
                     .onSubmit { m.send() }
                     .onKeyPress(phases: .down) { k in keys(k) }
@@ -1510,11 +1492,8 @@ private struct Composer: View {   // the typing box: grows in on hover (or the s
     }
     func bead(_ id: String, _ label: String, icon: [String], on: Bool, ring: Bool, tap: @escaping () -> Void) -> some View {
         let hot = m.hot.contains(id)
-        return ZStack {
-            if on { Circle().fill(Color.rgba(10, 132, 255, 0.55)) } else { Glass(hot: hot) }
-            Icon(paths: icon, stroke: 1.8, color: .white).frame(width: 15, height: 15)
-        }
-        .frame(width: 34, height: 34).overlay { if ring { Circle().inset(by: -2).stroke(Color.rgba(10, 132, 255, 0.8), lineWidth: 2) } }
+        return Icon(paths: icon, stroke: 1.8, color: .white).frame(width: 15, height: 15)
+        .frame(width: 34, height: 34).glassEffect(on ? .regular.tint(BX.blue) : hot ? .regular.tint(.white(0.15)) : .regular, in: .circle).overlay { if ring { Circle().inset(by: -2).stroke(Color.rgba(10, 132, 255, 0.8), lineWidth: 2) } }
         .scaleEffect(hot ? 1.1 : 1).animation(BX.spring(0.35), value: hot)
         .boxTarget(id, kind: .button(tap)).pressable(label, tap).help(label)
     }

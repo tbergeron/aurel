@@ -87,6 +87,7 @@ final class SettingsModel: ObservableObject {
     @Published var stats: [String: Any] = [:]
     @Published var asks: [[String: Any]] = []
     @Published var rules: [String] = []
+    @Published var writing = ""   // How I write (writing.md): only drafts and replies in the user's name use it
     @Published var skills: [[String: Any]] = []
     @Published var facts: [[String: Any]] = []
     @Published var plan: (ok: Bool, text: String)? = nil
@@ -173,7 +174,7 @@ final class SettingsModel: ObservableObject {
 
     func load(_ d: [String: Any]) {
         var p: [String: Any] = ["talkMode": "hold", "dictateMode": "verbatim", "dictateHotkeyLabel": "", "microphone": "automatic", "parakeetModel": "v3",
-                                "localModel": "gemma4", "unloadAfter": 5, "bigAsks": "local", "claudeSees": false, "client": "local"]
+                                "localModel": "gemma4", "unloadAfter": 5, "bigAsks": "local", "claudeSees": false, "readWindows": false, "client": "local"]
         p.merge(d["prefs"] as? [String: Any] ?? [:]) { $1 }
         p["routines"] = d["routines"] as? [[String: Any]] ?? []
         P = p; recording = ""; recCaps = nil; recKeys = nil
@@ -189,7 +190,7 @@ final class SettingsModel: ObservableObject {
     }
 
     func state(_ s: [String: Any]) {
-        rules = s["rules"] as? [String] ?? []; skills = s["skills"] as? [[String: Any]] ?? []
+        rules = s["rules"] as? [String] ?? []; skills = s["skills"] as? [[String: Any]] ?? []; writing = s["writing"] as? String ?? ""
         facts = (s["me"] as? [String: Any])?["facts"] as? [[String: Any]] ?? []
         if let p = s["plan"] as? [String: Any] { plan = (p["ok"] as? Bool ?? false, p["text"] as? String ?? "") }
         asks = s["asks"] as? [[String: Any]] ?? []
@@ -267,13 +268,13 @@ final class SettingsModel: ObservableObject {
         guard let w = want, painted, let c = w["c"] as? String else { return }
         let t = w["t"] as? String ?? ""
         let isProfile = profileCategories.contains { $0.0 == c }
-        guard isProfile || c == "rules" else { return }
+        guard isProfile || c == "rules" || c == "writing" else { return }
         want = nil
         if isProfile { openProfile.insert(c) }
         let target: String
         if c == "rules", let i = rules.firstIndex(of: t) { target = "rule-\(i)" }
         else if isProfile, let f = facts.first(where: { $0["category"] as? String == c && "\($0["kind"] ?? ""): \($0["value"] ?? "")" == t }) { target = "fact-\(f["id"] ?? "")" }
-        else { target = isProfile ? "cat-\(c)" : "rules" }
+        else { target = isProfile ? "cat-\(c)" : c == "writing" ? "writing" : "rules" }
         DispatchQueue.main.async { self.scroll?(target); self.flash = nil; DispatchQueue.main.async { self.flash = target } }
     }
 
@@ -1033,8 +1034,10 @@ private struct BrainSection: View {
                     ModelStatus(m: m, title: "Local model status", parakeet: false)
                     Row { _ in Title(b: "Bigger asks", span: m.str("bigAsks") == "claude" ? "Aurel sends only big asks to Claude. Needs Claude Code." : "Everything stays on this Mac.")
                         Seg(options: [("local", "Local"), ("claude", "Claude")], value: m.str("bigAsks")) { m.set("bigAsks", $0) } }
-                    Row { _ in Title(b: "Use Claude to see pictures", span: "The local model can't see. Asks with a picture, like what you point at, go to Claude. Needs Claude Code.")
+                    Row { _ in Title(b: "Use Claude to see pictures", span: "The local model can't see, so asks with a picture go to Claude.", info: "Like what you point at or a screenshot. Needs Claude Code.")
                         Switch(on: m.bool("claudeSees")) { m.set("claudeSees", !m.bool("claudeSees")) } }
+                    Row { _ in Title(b: "Use Claude to read other apps", span: "When “read Muse’s last reply” can’t find it on this Mac, Claude tries.", info: "Aurel reads the window and the local model finds the reply first. Claude is only the fallback, and gets that window’s text. Needs Claude Code.")
+                        Switch(on: m.bool("readWindows")) { m.set("readWindows", !m.bool("readWindows")) } }
                 } else {
                     Row { _ in Title(b: "Intelligence", span: ["cheapest": "Haiku for everything. Fastest.", "balanced": "Haiku for quick asks, work model for real work.", "capable": "Work model for everything. Slower."][m.routing] ?? "")
                         Seg(options: [("cheapest", "Cheapest"), ("balanced", "Balanced"), ("capable", "Most capable")], value: m.routing) { m.set("routing", $0) } }
@@ -1095,6 +1098,9 @@ private struct MemorySection: View {
                 }
             }.id("rules")
             Lede(s: "Say “remember…” or add one here.", size: 11.5, bottom: 0).padding(EdgeInsets(top: 9, leading: 2, bottom: 0, trailing: 2))
+            H3(s: "How I write").padding(.top, 30)
+            Group_ { WritingBox(m: m) }.flash(m.flash == "writing").id("writing")
+            Lede(s: "Sent only with drafts and replies in your name. Describe your style, then paste a few messages you sent.", size: 11.5, bottom: 0).padding(EdgeInsets(top: 9, leading: 2, bottom: 0, trailing: 2))
             H3(s: "Saved commands and procedures").padding(.top, 30)
             if m.skills.isEmpty { T(s: "None yet. What works lands here.", size: 12, color: th.fg3).padding(EdgeInsets(top: 2, leading: 2, bottom: 0, trailing: 2)) }
             else {
@@ -1113,6 +1119,29 @@ private struct MemorySection: View {
                 }
             }
         }
+    }
+}
+private struct WritingBox: View {   // one free-text note, saved when the editor lets go, like a rule row
+    @ObservedObject var m: SettingsModel
+    @State private var text = ""
+    @State private var sent: String?
+    @FocusState private var focused: Bool
+    @Environment(\.prefsTheme) var th
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            TextEditor(text: $text).font(cssFont(13)).foregroundColor(th.fg).scrollContentBackground(.hidden).focused($focused)
+            if text.isEmpty {
+                Text("Short and casual, mostly lowercase, no greeting. I sign off with “T”.\n\nA few messages I sent:\n…")
+                    .font(cssFont(13)).foregroundColor(th.fg3).padding(.leading, 5).allowsHitTesting(false)
+            }
+        }
+        .padding(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)).frame(height: 160)
+        .onAppear { text = m.writing }.onChange(of: m.writing) { _, v in if !focused { text = v; sent = nil } }
+        .onChange(of: focused) { _, f in if !f { save() } }.onDisappear { save() }
+    }
+    func save() {   // once per change: leaving the editor or the section saves it
+        guard text != m.writing, text != sent else { return }
+        sent = text; m.post(["do": "writing", "text": text])
     }
 }
 private struct RuleRow: View {

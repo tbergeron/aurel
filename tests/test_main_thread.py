@@ -137,6 +137,6 @@ mic.start(device, sampleRate: 16000, { _ in }) { result in
 RunLoop.current.run(until: Date().addingTimeInterval(0.3))
 precondition(errors == 1)
 ''')
-        start = source[source.index('        engine.start(device,'):source.index('    func heard(')]
+        start = source[source.index('        let ready: (Result<Void, Error>)'):source.index('    func heard(')]
         self.assertIn('listenID == listeningID', start)
         self.assertLess(start.index('if case .failure'), start.index('began = Date()'))

@@ -341,6 +341,10 @@ final class Mic: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
             }
         }
     }
+    // Gives the open session to a new listener without reopening the device; `first` runs on the mic's queue, so no buffer slips past it.
+    func handOff(_ first: () -> AVAudioPCMBuffer?, _ onBuffer: @escaping (AVAudioPCMBuffer) -> Void) {
+        queue.sync { if let b = first() { onBuffer(b) }; self.onBuffer = onBuffer }
+    }
     func stop(completion: @escaping () -> Void = {}) {
         generation += 1; isRunning = false
         Self.sessionQueue.async { [self] in
@@ -372,6 +376,28 @@ final class ParakeetAudio: @unchecked Sendable {
     func snapshot() -> [Float] { lock.lock(); defer { lock.unlock() }; return samples }
     var seconds: Double { lock.lock(); defer { lock.unlock() }; return Double(samples.count) / 16000 }
     func take() -> [Float] { lock.lock(); defer { samples = []; lock.unlock() }; return samples }
+}
+// The wake listener feeds Apple's recognizer only around sound: fed silence, it transcribes it all day (~7% of a core in
+// localspeechrecognition). On the mic queue. Recognizer timings and the replay stay in step: both get the same buffers.
+final class SoundGate {
+    static let level: Float = 0.003   // RMS, about −50 dBFS: under a voice across the room, over a quiet room's hiss. Tune it here.
+    private var lead: [AVAudioPCMBuffer] = [], leadFrames = 0, hold = 0, loud = 0
+    // What to pass on: nothing in silence; at a sound, the 0.5 s before it too (the start of "Aurel"); after it, 1 s more.
+    // A sound counts after 60 ms in a row: a voice holds a vowel that long, a key click fades sooner (typing kept it open 71% → 25%).
+    func pass(_ b: AVAudioPCMBuffer) -> [AVAudioPCMBuffer] {
+        let rate = Int(b.format.sampleRate), n = Int(b.frameLength)
+        loud = Self.rms(b) >= Self.level ? loud + n : 0
+        if loud >= rate * 6 / 100 { let out = lead + [b]; lead = []; leadFrames = 0; hold = rate; return out }
+        if hold > 0 { hold -= n; return [b] }
+        lead.append(b); leadFrames += n
+        while let first = lead.first, leadFrames - Int(first.frameLength) >= rate / 2 { leadFrames -= Int(first.frameLength); lead.removeFirst() }
+        return []
+    }
+    static func rms(_ b: AVAudioPCMBuffer) -> Float {
+        guard let ch = b.floatChannelData?[0], b.frameLength > 0 else { return 0 }
+        var sum: Float = 0; for i in 0..<Int(b.frameLength) { sum += ch[i] * ch[i] }
+        return (sum / Float(b.frameLength)).squareRoot()
+    }
 }
 
 // Owns one `aurel-parakeet serve` on pipes: it exits when Aurel closes them or dies (no orphans), and the idle time in
@@ -705,15 +731,17 @@ final class LocalAI: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: file) else { throw Failed("The \(m.name) model isn’t downloaded.") }
         guard let free = Self.freePort() else { throw Failed("No free port for the local model.") }
         proc?.terminate()   // only the server this Aurel started
+        try? FileManager.default.createDirectory(atPath: Self.dir + "/slots", withIntermediateDirectories: true)
         let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/sh")
         // Two slots, so the router's prompt and the full ask's each stay cached; -c: 16K each for the prompt, window text and
-        // a few steps. Thinking off: a voice ask can't wait for it.
+        // a few steps. Thinking off: a voice ask can't wait for it. --slot-save-path: the ask prompt, read once, reloads from disk (local_prewarm);
+        // --no-cache-idle-slots: a restored slot has no task, so the default would clear it the moment the router runs.
         p.arguments = ["-c", """
-            "$0" -m "$1" --host 127.0.0.1 --port \(free) -c 32768 -np 2 -ngl 99 --no-webui --reasoning-budget 0 & s=$!
+            "$0" -m "$1" --host 127.0.0.1 --port \(free) -c 32768 -np 2 -ngl 99 --no-webui --reasoning-budget 0 --no-cache-idle-slots --slot-save-path "$2" & s=$!
             trap 'kill $s 2>/dev/null; exit 0' TERM INT
             while kill -0 \(getpid()) 2>/dev/null && kill -0 $s 2>/dev/null; do sleep 1 & wait $!; done
             kill $s 2>/dev/null
-            """, Self.server, file]
+            """, Self.server, file, Self.dir + "/slots"]
         p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
         try p.run()
         proc = p; port = free; serving = m.id
@@ -779,6 +807,22 @@ struct CoreAudioVolume: AudioVolumeLayer {
         var a = AudioObjectPropertyAddress(mSelector: snapshot.selector, mScope: kAudioDevicePropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
         var value = volume
         return AudioObjectSetPropertyData(device, &a, 0, nil, UInt32(MemoryLayout<Float32>.size), &value) == noErr
+    }
+}
+// An asked-for read-aloud on a muted (or silent) Mac: 50% and unmuted while it reads. Returns what puts mute and volume back; nil: nothing changed.
+func unmuteOutput() -> (() -> Void)? {
+    guard let device = audioProp(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice, AudioDeviceID(0)).first, device != 0 else { return nil }
+    var mute = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyMute, mScope: kAudioDevicePropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
+    var on: UInt32 = 0, size = UInt32(MemoryLayout<UInt32>.size)
+    let muted = AudioObjectHasProperty(device, &mute) && AudioObjectGetPropertyData(device, &mute, 0, nil, &size, &on) == noErr && on != 0
+    let volume = CoreAudioVolume(), before = volume.snapshot()
+    guard muted || (before?.volume ?? 1) < 0.05 else { return nil }
+    if let before { volume.set(before, volume: 0.5) }
+    func setMute(_ value: UInt32) { var v = value; AudioObjectSetPropertyData(device, &mute, 0, nil, size, &v) }
+    if muted { setMute(0) }
+    return {
+        if let before { volume.set(before, volume: before.volume) }
+        if muted { setMute(1) }
     }
 }
 final class AudioQuiet {
@@ -2185,7 +2229,7 @@ final class App: NSObject {
     let panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: boxWidth(Prefs.num("boxW"), mouseScreen.visibleFrame), height: 76),
                         styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
     let boxModel: BoxModel, boxView: NSHostingView<BoxView>   // the box (Box.swift): the model takes each call, the view draws it
-    let engine = Mic()
+    var engine = Mic()   // swaps with wakeMic when the wake word hands its open mic to the ask
     // Speech: Apple's SpeechAnalyzer (macOS 26+), on-device and free; punctuates and capitalizes.
     var feed: AsyncStream<AnalyzerInput>.Continuation?, analyzer: SpeechAnalyzer?, reading: Task<Void, Never>?
     var speechInputs: SpeechInputs?, speechInputID: UUID?, speechSegment = 0, activeSpeechSegment = 0
@@ -2204,26 +2248,129 @@ final class App: NSObject {
     }
     var handsFree = false, followUp = false, wakeSleeping = false, wakeInactive = false
     var wakeSuspended: Bool { wakeSleeping || wakeInactive }
-    let wakeMic = Mic()
+    var wakeMic = Mic()
+    var stopMic = Mic(), stopTask: SFSpeechRecognitionTask?, stopRequest: SFSpeechAudioBufferRecognitionRequest?, stopID = 0, stopRetry = Date.distantPast   // "Aurel, stop" while it reads aloud
+    let wakeAudio = ParakeetAudio()   // what the wake listener heard (16 kHz, under 50 s): the ask replays the words after the name
+    var wakeCarry: (from: Double, early: Bool, after: [String])?, wakeStrip: (early: Bool, after: [String])?   // nil: not a wake replay
+    var wakeHeard: (raw: String, early: Bool, after: [String])?
     var wakeRecognizer: SFSpeechRecognizer?
     var wakeTask: SFSpeechRecognitionTask?, wakeRequest: SFSpeechAudioBufferRecognitionRequest?
     var wakeID = 0, wakeRetry = Date.distantPast, wakeBegan = Date.distantPast, wakeDevice = ""
     var wakeBackoff = 1.0, wakePermissionID = 0, wakeWhy = "?"
     // "Aurel" is rare, so the recognizer is told to expect it, and the ways it spells the name count too: Aural, Orel, Oriel,
     // Aurelle… anywhere; words people say anyway (oral, Laurel, Ariel) only right after a greeting: "hey Laurel".
-    static func hasWakeWord(_ text: String) -> Bool {
-        text.range(of: #"(?i)(?<![\p{L}\p{N}_])(?:(?:au|o)r{1,2}(?:e|ie|ea)l{1,2}e?|aural|(?:hey|hi|ok|okay|yo),? (?:oral|laurel|ariel|arial|or el|our el))(?:['’]s)?(?![\p{L}\p{N}_])"#, options: .regularExpression) != nil
+    static func hasWakeWord(_ text: String) -> Bool { text.range(of: wakeWord, options: .regularExpression) != nil }
+    static let wakeWord = #"(?i)(?<![\p{L}\p{N}_])(?:(?:au|o)r{1,2}(?:e|ie|ea)l{1,2}e?|aural|(?:hey|hi|ok|okay|yo),? (?:oral|laurel|ariel|arial|or el|our el))(?:['’]s)?(?![\p{L}\p{N}_])"#
+    // A wake replay drops the name and the few words (`lead`) heard before it: "…Aurel, open Fastmail" → "open Fastmail".
+    // The ask's speech model spells the name its own way: Parakeet hears "RL".
+    static let spokenName = #"(?i)(?<![\p{L}\p{N}_])(?:(?:hey|hi|ok|okay|yo),? )?(?:r\.? ?l\.?|earl|errol|oral|ariel|laurel)(?![\p{L}\p{N}_])"#
+    // Or any first word that sounds like it: a consonant at most, then vowels, r, vowels, l ("Marl, switch to Claude", "Carl", "R L").
+    // A request rarely starts with such a word; one that does ("Really…") loses it only in a wake replay.
+    static let nameFirst = #"(?i)^\W*(?:(?:hey|hi|ok|okay|yo)\W+)?(?:[a-z]?[aeiouhy]*r+[aeiouy]*l+[aeiouy]*|r\W{0,2}l)(?![\p{L}\p{N}_])"#
+    // early: the replay began 2 s back, so the first thing said is the name however it was heard ("All right.", "Marl,", "R. L.").
+    // after: words the wake listener heard after the name ("tell Muse"); the ask starts at them.
+    static func editDistance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b); var row = Array(0...b.count)
+        for i in a.indices {
+            var last = row[0]; row[0] = i + 1
+            for j in b.indices { let up = row[j + 1]; row[j + 1] = min(up + 1, row[j] + 1, last + (a[i] == b[j] ? 0 : 1)); last = up }
+        }
+        return row[b.count]
+    }
+    static func afterWakeWord(_ text: String, early: Bool, after: [String]) -> String {
+        func key(_ w: Substring) -> String { w.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+        func rest(_ r: Range<String.Index>) -> String { String(text[r.upperBound...].drop { $0 == " " || $0.isPunctuation }) }
+        var words = text.split(separator: " ")[...]
+        if !after.isEmpty, words.count >= after.count,
+           let i = (words.startIndex...(words.endIndex - after.count)).first(where: { i in after.indices.allSatisfy { key(words[i + $0]) == after[$0] } }) {
+            return words[i...].joined(separator: " ")
+        }
+        if let r = text.range(of: wakeWord, options: .regularExpression) ?? text.range(of: spokenName, options: .regularExpression),
+           text[..<r.lowerBound].split(separator: " ").count <= (early ? 3 : 0) { return rest(r) }
+        if let r = text.range(of: nameFirst, options: .regularExpression) { return rest(r) }
+        guard early, !words.isEmpty else { return text }
+        // Only a near-miss of the name goes ("Carl", "Oreo", "Arrow."): a name recognized late is not in the replay, and "Tell Muse…" keeps its "Tell"
+        func nameLike(_ w: String, _ most: Int) -> Bool {
+            w.contains("r") && ["aurel", "orel", "arel", "aural", "orrel"].contains { editDistance(w, $0) <= most } && (most > 2 || w.contains("l") || "aeiou".contains(w.last ?? " "))
+        }
+        if ["hey", "hi", "ok", "okay", "yo", "um", "uh"].contains(key(words[words.startIndex])) { words = words.dropFirst() }
+        guard let f = words.first else { return "" }
+        if key(f).count == 1 { words = words.drop { key($0).count == 1 } }   // "R. L."
+        else if key(f) == "alright" { words = words.dropFirst() }
+        else if words.count > 1, key(f) + key(words[words.startIndex + 1]) == "allright" { words = words.dropFirst(2) }
+        else if ",.!?;:".contains(f.last ?? " ") && nameLike(key(f), 3) || nameLike(key(f), 2) { words = words.dropFirst() }   // "Marl," / "Barrel open Notes"
+        return words.joined(separator: " ")
     }
     // A hands-free chat ends when the whole utterance says so ("close", "that's all, thanks"); "close Safari" is still an ask.
     static func endsChat(_ text: String) -> Bool {
         let words = text.lowercased().replacingOccurrences(of: "’", with: "'").components(separatedBy: CharacterSet.letters.union(.init(charactersIn: "'")).inverted).filter { !$0.isEmpty }.joined(separator: " ")
-        return words.range(of: #"^(?:(?:ok|okay|thanks|thank you|hey|aurel) )*(?:close|close it|stop|stop listening|goodbye|bye|bye bye|that's all|that's it|i'm done|we're done|nothing else|never mind|nevermind)(?: (?:thanks|thank you|aurel))*$"#, options: .regularExpression) != nil
+        // also a wake word heard by mistake: "oh, never mind", "sorry, not you"
+        return words.range(of: #"^(?:(?:ok|okay|thanks|thank you|hey|aurel|oh|no|sorry|oops) )*(?:close|close it|stop|stop listening|goodbye|bye|bye bye|that's all|that's it|i'm done|we're done|nothing else|never mind|nevermind|forget it|cancel|not you|not talking to you|i wasn't talking to you|i'm not talking to you|go away)(?: (?:thanks|thank you|aurel|sorry))*$"#, options: .regularExpression) != nil
+    }
+    // "Aurel, stop" / "shut up, Aurel": the name next to a stop word, either order, so the text being read can't stop itself
+    static func namePhrase(_ words: String) -> String {
+        let name = String(wakeWord.dropFirst(4)), said = "(?:\(words))(?![\\p{L}\\p{N}_])"
+        return "(?i)(?:\(name)\\W+(?:\\w+\\W+){0,2}\(said)|\(said)\\W+(?:\\w+\\W+){0,2}\(name))"
+    }
+    static let stopPhrase = namePhrase(#"stop|shut up|be quiet|quiet|hush|enough|that's enough|silence|stop talking|stop reading"#)
+    static let cancelPhrase = namePhrase(#"never ?mind|cancel|forget it|not you|stop|go away"#)   // while it works on an ask the wake word started by mistake
+    static func saysStop(_ text: String) -> Bool { text.replacingOccurrences(of: "’", with: "'").range(of: stopPhrase, options: .regularExpression) != nil }
+    static func saysCancel(_ text: String) -> Bool { text.replacingOccurrences(of: "’", with: "'").range(of: cancelPhrase, options: .regularExpression) != nil }
+    // A wake word heard by mistake keeps listening to whatever was said next: "…so anyway. Never mind." throws all of it away.
+    // Its own sentence only: "tell Muse, never mind" is a message to send.
+    static func cancelsAtEnd(_ text: String) -> Bool {
+        let sentences = text.replacingOccurrences(of: "’", with: "'").components(separatedBy: CharacterSet(charactersIn: ".!?")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard sentences.count > 1, let last = sentences.last?.lowercased() else { return false }
+        return last.range(of: #"^(?:(?:oh|no|sorry|oops|ok|okay|aurel)[, ]+)*(?:never ?mind|forget it|cancel|not you|go away|(?:i was not|i wasn't|i'm not|not) talking to you)(?:[, ]+(?:aurel|sorry|then))*$"#, options: .regularExpression) != nil
     }
     func stopWake() {
         wakeID += 1
         let task = wakeTask, request = wakeRequest
         wakeTask = nil; wakeRequest = nil; wakeRecognizer = nil
+        if wakeCarry != nil { task?.cancel(); return }   // the mic stays open: start() hands it to the ask the name began
         wakeMic.stop { task?.cancel(); request?.endAudio() }   // drain audio callbacks before ending their request
+    }
+    // While Aurel reads aloud or works on a hands-free ask the wake listener waits (it would hear Aurel); this one only listens for
+    // the stop and cancel phrases. Wake word on only.
+    func stopTick() {
+        let speaking = voice?.isRunning == true || drawing.voice?.isRunning == true
+        guard speaking || handsFree && busy, Prefs.bool("wakeWord"), !Prefs.bool("paused"), !engine.isRunning, !dictating,
+              AVCaptureDevice.authorizationStatus(for: .audio) == .authorized, SFSpeechRecognizer.authorizationStatus() == .authorized else {
+            if stopRequest != nil { endStopListen() }; return
+        }
+        guard stopRequest == nil, Date() >= stopRetry,
+              let device = listenMic().flatMap({ AVCaptureDevice(uniqueID: $0.uid) }) ?? AVCaptureDevice.default(for: .audio),
+              let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else { return }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.requiresOnDeviceRecognition = true; request.shouldReportPartialResults = true; request.contextualStrings = ["Aurel stop", "Aurel shut up", "Aurel never mind", "Aurel cancel"]
+        stopRequest = request; stopID += 1; let id = stopID
+        NSLog("Read aloud: listening for the name on %@", device.localizedName)
+        stopTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, stopID == id else { return }
+                let said = result?.transcriptions.map(\.formattedString) ?? []
+                if self.handsFree && self.busy && said.contains(where: Self.saysCancel) {   // "Aurel, never mind" while it works on a mistaken ask
+                    NSLog("Hands-free: cancelled by voice"); endStopListen(); cue("soundStop"); close(clear: false)
+                }
+                // in a hands-free chat the name alone cuts the answer short: listenAgain() then opens the mic for the next instruction
+                else if said.contains(where: { Self.saysStop($0) || self.handsFree && self.followUp && Self.hasWakeWord($0) }) {
+                    NSLog("Read aloud: stopped by voice"); endStopListen(); shush()
+                } else if error != nil || result?.isFinal == true {
+                    NSLog("Read aloud: stop listener heard \"%@\"%@", String((said.first ?? "").prefix(80)), error.map { " (\($0.localizedDescription))" } ?? "")
+                    endStopListen(); stopRetry = Date().addingTimeInterval(error == nil ? 0 : 2)   // the next tick listens again while it still speaks
+                }
+            }
+        }
+        stopMic.start(device, sampleRate: 16000, { request.append($0) }) { [weak self] result in
+            guard let self, stopID == id else { return }
+            if case .failure(let error) = result { NSLog("Read aloud: stop mic error %@", error.localizedDescription); endStopListen(); stopRetry = Date().addingTimeInterval(5) }
+        }
+    }
+    func endStopListen() {
+        stopID += 1
+        let task = stopTask, request = stopRequest
+        stopTask = nil; stopRequest = nil
+        stopMic.stop { task?.cancel(); request?.endAudio() }
     }
     func wakeFailed() {
         if Date().timeIntervalSince(wakeBegan) > 10 { wakeBackoff = 1 }
@@ -2261,12 +2408,21 @@ final class App: NSObject {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition = true; request.shouldReportPartialResults = true; request.contextualStrings = ["Aurel", "Hey Aurel"]
         wakeRecognizer = recognizer; wakeRequest = request; wakeID += 1; let id = wakeID
-        wakeBegan = Date(); wakeDevice = device.uniqueID
+        wakeBegan = Date(); wakeDevice = device.uniqueID; wakeAudio.reset()
         wakeTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             DispatchQueue.main.async { [weak self] in
                 guard let self, wakeID == id else { return }
-                if let result, result.transcriptions.contains(where: { Self.hasWakeWord($0.formattedString) }) {   // its other guesses too: a rare name is often second
+                if let result, let match = result.transcriptions.first(where: { Self.hasWakeWord($0.formattedString) }) {   // its other guesses too: a rare name is often second
                     wakeBackoff = 1
+                    // "Aurel, open Fastmail" in one breath: the ask replays from the end of the name, or (a partial result
+                    // may carry no timings) from 2 s back, and heard() strips the name.
+                    let segs = match.segments, i = segs.indices.first { Self.hasWakeWord(segs[...$0].map(\.substring).joined(separator: " ")) }
+                    let end = i.map { segs[$0].timestamp + segs[$0].duration } ?? 0
+                    // the name can be recognized late, after more words ("Aurel tell Muse"): reach back past them too
+                    let said = match.formattedString, name = said.range(of: Self.wakeWord, options: .regularExpression)
+                    let after = name.map { said[$0.upperBound...].split { !$0.isLetter && !$0.isNumber && $0 != "'" }.map { $0.lowercased() } } ?? []
+                    wakeCarry = end > 0 ? (end, false, []) : (max(0, wakeAudio.seconds - 2 - 0.45 * Double(after.count)), true, Array(after.prefix(2)))
+                    NSLog("Wake word: replay from %.2f s of %.2f (%@)", wakeCarry!.from, wakeAudio.seconds, end > 0 ? "after the name" : "2 s back")
                     stopWake(); handsFree = true; clickMicrophone()
                 } else if error != nil || result?.isFinal == true {
                     if let error { NSLog("Wake word: recognizer error %@", error.localizedDescription) }
@@ -2274,7 +2430,8 @@ final class App: NSObject {
                 }
             }
         }
-        wakeMic.start(device, sampleRate: 16000, { request.append($0) }) { [weak self] result in
+        let audio = wakeAudio, gate = SoundGate()
+        wakeMic.start(device, sampleRate: 16000, { for b in gate.pass($0) { request.append(b); audio.append(b) } }) { [weak self] result in
             guard let self, wakeID == id else { return }
             if case .failure(let error) = result { NSLog("Wake word: mic error %@", error.localizedDescription); wakeFailed() }
         }
@@ -2359,6 +2516,7 @@ final class App: NSObject {
     var hovering = false, pinned = false, stuck = false, lastDone = Date.distantPast   // pinned: the user clicked the box, so only Esc / click-out / ✕ close it; stuck: the user dragged it, so only ✕
     var screenFrames = NSScreen.screens.map(\.frame)   // last display layout; a change in it makes an on-screen drawing stale
     var selection: TextSelection?, replacement: String?, mode = "replace", warmSel = ""   // mode: replace · delete · draft
+    var readAloud = false   // 🔊: the next answer is another app's words, read aloud even with Read answers aloud off
     var selectionID = 0, selectionPending = false, replacing = false
     var mine = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""   // the app the user's in, never Aurel itself
     var userApp = NSWorkspace.shared.frontmostApplication, guardUntil = Date.distantPast, allowUntil = Date.distantPast, userSwitch = Date.distantPast
@@ -2444,7 +2602,9 @@ final class App: NSObject {
     // how many words that is now, or nil when the words changed.
     func actedWords() -> Int? {
         let key = { (s: String) in transcriptKey(s).filter { $0.isLetter || $0.isNumber } }, want = key(consumedText), w = words()
-        return (0...w.count).first { key(w.prefix($0).joined(separator: " ")) == want }
+        // "Open Muse." becomes "Open Muse's tell…" as the user keeps talking: the same words acted on
+        let possessive = { (n: Int) in n > 0 && w[n - 1].lowercased().replacingOccurrences(of: "’", with: "'").trimmingCharacters(in: .punctuationCharacters).hasSuffix("'s") }
+        return (0...w.count).first { key(w.prefix($0).joined(separator: " ")) == want || possessive($0) && key(w.prefix($0).joined(separator: " ")) == want + "s" }
     }
     func cue(_ k: String) { let n = Prefs.str(k); if n != "None" { sound(n, Float(Prefs.num("volume"))) } }   // soundStart / soundRelease / soundDone / soundStop
     let drawing = ScreenDrawing()
@@ -2456,20 +2616,24 @@ final class App: NSObject {
         UserDefaults.standard.set(true, forKey: "voiceQualityTip")
         show(); js("notice", "Voice sounds robotic? This Mac has no natural voice yet. Get one: System Settings → Accessibility → Read & Speak → System voice → Manage Voices → download an Enhanced or Premium voice, then pick it as the System voice."); hide(after: 14)
     }
+    var unmuted: (() -> Void)?   // a read-aloud unmuted the Mac: puts mute and volume back when it ends or is stopped
+    func remute() { unmuted?(); unmuted = nil }
     @discardableResult func shush() -> Bool {
+        remute()
         guard let v = voice else { return false }; voice = nil
         guard v.isRunning else { return false }; v.terminate(); return true
     }
-    func deliver(_ a: String, aloud: Bool = true) {   // Settings: read answers aloud, copy them
+    func deliver(_ a: String, aloud: Bool = true, force: Bool = false) {   // Settings: read answers aloud, copy them
         if Prefs.bool("autoCopy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(a, forType: .string) }
-        if Prefs.bool("speak") && aloud {
+        if (Prefs.bool("speak") || force) && aloud {
             stopWake()
             let arguments = readAloudArguments(spoken(a)) { voiceQualityTip() }
             shush(); let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/say"); p.arguments = arguments
+            if force { unmuted = unmuteOutput() }   // the user asked to hear it: a muted Mac reads at 50%, then mutes again
             p.terminationHandler = { [weak self] _ in DispatchQueue.main.async {
-                guard let self, self.voice === p else { return }; self.voice = nil; self.cueEnds = max(self.cueEnds, Date().addingTimeInterval(0.3)); self.hide(after: 2)
+                guard let self, self.voice === p else { return }; self.voice = nil; self.remute(); self.cueEnds = max(self.cueEnds, Date().addingTimeInterval(0.3)); self.hide(after: 2)
             } }
-            try? p.run(); voice = p
+            do { try p.run(); voice = p } catch { remute() }
         }
     }
     func linger(_ s: Double) -> Double { s * (["short": 0.5, "long": 2][Prefs.str("linger")] ?? 1) }
@@ -2588,15 +2752,14 @@ final class App: NSObject {
         boxModel.onSize = { [weak self] in self?.size($0) }
         boxModel.onMini = { [weak self] in self?.mini.layout($0) }
         boxView.autoresizingMask = [.width, .height]
-        let bg = NSVisualEffectView(frame: boxView.frame)
-        bg.material = .hudWindow; bg.state = .active; bg.wantsLayer = true; bg.autoresizingMask = [.width, .height]
+        let bg = NSView(frame: boxView.frame); bg.autoresizingMask = [.width, .height]
         bg.appearance = NSAppearance(named: .darkAqua)   // stays dark over white pages, so the orb shows
-        bg.layer?.cornerRadius = 18; bg.layer?.masksToBounds = true
-        bg.maskImage = NSImage(size: NSSize(width: 37, height: 37), flipped: false) { NSColor.black.setFill(); NSBezierPath(roundedRect: $0, xRadius: 18, yRadius: 18).fill(); return true }
-        bg.maskImage?.capInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18); bg.maskImage?.resizingMode = .stretch
-        let tint = NSView(frame:boxView.frame); tint.wantsLayer = true; tint.autoresizingMask = [.width,.height]
-        tint.layer?.backgroundColor = NSColor(calibratedRed:18/255,green:18/255,blue:20/255,alpha:0.85).cgColor   // light enough for the blur to show; over white it keeps small text AA (tests/test_box_native.py)
-        bg.addSubview(tint); bg.addSubview(mini.clip)
+        bg.wantsLayer = true; bg.layer?.cornerRadius = 18; bg.layer?.cornerCurve = .continuous; bg.layer?.masksToBounds = true
+        // Liquid Glass behind the box, drawn by SwiftUI: AppKit's glass view turns on Auto Layout in the panel, and then a shrinking box
+        // kept its taller content, hanging off the top (square top corners, no header) until hovered.
+        let glass = NSHostingView(rootView: Color.clear.glassEffect(.regular, in: .rect(cornerRadius: 18)))
+        glass.frame = boxView.frame; glass.sizingOptions = []; glass.autoresizingMask = [.width, .height]; bg.addSubview(glass)   // no dark tint over it: the user's Liquid Glass setting decides how clear (tests/test_box_native.py)
+        bg.addSubview(mini.clip)
         mini.publish = { [weak self] value in self?.js("mini",value) }
         mini.captureAllowed = { agentsUI.mini.target == nil }
         bg.addSubview(boxView)
@@ -3235,7 +3398,12 @@ final class App: NSObject {
 
     func start(dictate: Bool, quiet: Bool = false) {
         handsFreeIdle += 1
+        // a shortcut press while the wake listener has the mic open keeps that mic, from just before the press: a new mic
+        // takes ~0.1 s to start and Parakeet then loses the first word ("Tell Muse…" heard as "Muse…"). No name to strip.
+        let pressed = wakeCarry == nil && wakeMic.isRunning
+        if pressed { wakeCarry = (max(0, wakeAudio.seconds - 0.2), false, []) }
         stopWake()
+        defer { if wakeCarry != nil { wakeCarry = nil; wakeMic.stop() } }   // returned before taking the wake listener's open mic
         if dictate && !AXIsProcessTrusted() {
             pill(true); show()
             js("dictated", ["text": "Allow Accessibility in System Settings → Privacy & Security → Accessibility", "ok": false])
@@ -3263,7 +3431,7 @@ final class App: NSObject {
             if dictateCleanup { warmDictationCleanup() }
         } else if replying { offerText = text } else { captureSelection(); replacement = nil }
         if !dictate && !drawingReply { targetScreen = currentRequestScreen(panel) }   // a guide may have moved the box to another display
-        text = ""; ahead = ""; speechFailed = false; consumed = 0; consumedText = ""; liveRevised = false; did = []
+        text = ""; ahead = ""; speechFailed = false; consumed = 0; consumedText = ""; liveRevised = false; did = []; wakeHeard = nil
         if !panel.isVisible && Date().timeIntervalSince(lastDone) > 300 { js("reset"); try? FileManager.default.removeItem(atPath: recent) }
         quietFollowUp = quiet
         if !dictate { handsFree = true }   // a spoken ask is a conversation: after each answer it listens again until "close", ✕, Esc or quiet
@@ -3337,7 +3505,9 @@ final class App: NSObject {
             let v = Double(min(1, sqrt(sum / Float(buf.frameLength)) * 14))
             DispatchQueue.main.async { if self?.listenID == listeningID, self?.engine.isRunning == true { if self?.quietFollowUp == false { self?.js("level", v) }; if parakeet && v > 0.1 { self?.parakeetVoiced() } } }
         }
-        engine.start(device, sampleRate: want.sampleRate, onBuffer) { [weak self] result in
+        let carry = wakeCarry.flatMap { wakeMic.isRunning && device.uniqueID == wakeDevice ? $0 : nil }
+        wakeStrip = pressed ? nil : carry.map { ($0.early, $0.after) }
+        let ready: (Result<Void, Error>) -> Void = { [weak self] result in
             guard let self, listenID == listeningID else { return }
             if case .failure(let error) = result { if replying { stopOfferInput() } else { hush() }; js("msg", "Mic error: \(error.localizedDescription)"); hide(after: 3); return }
             began = Date()   // measure the limit from when the mic is ready
@@ -3345,8 +3515,11 @@ final class App: NSObject {
             Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] t in
                 guard let self, listenID == listeningID, engine.isRunning else { return t.invalidate() }
                 let f = (dictating ? dictateHotkey() : hotkey()).flags, held = Date().timeIntervalSince(began)
-                // nothing said: stop the mic quietly; a hands-free chat keeps listening until "close", ✕, Esc or 2 min of quiet
-                if clickTalk && text.isEmpty && held > (quietFollowUp ? 120 : 8) { t.invalidate(); if quietFollowUp { hush(); fadeIdleHandsFree(); return }; if offerText != nil { stopOfferInput(); return }; hush(); js("stopped", ""); return hide(after: 3) }
+                // nothing said: stop the mic quietly; a hands-free chat keeps listening until "close", ✕, Esc or 2 min of quiet.
+                // A voice with no words yet is Parakeet still loading (it unloads when idle): the end pause sends it to the final pass instead.
+                let voiced = parakeet && parakeetVoice > began
+                if parakeet && clickTalk && !quietFollowUp && voiced && text.isEmpty && Date().timeIntervalSince(parakeetVoice) >= Self.endPause { NSLog("Listen: a voice but no words yet, final pass"); t.invalidate(); return stop() }
+                if clickTalk && text.isEmpty && (!voiced || quietFollowUp) && held > (quietFollowUp ? 120 : 8) { t.invalidate(); if quietFollowUp { hush(); fadeIdleHandsFree(); return }; if offerText != nil { stopOfferInput(); return }; hush(); js("stopped", ""); return hide(after: 3) }
                 if parakeet && clickTalk && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && parakeetDone(Self.endPause) { t.invalidate(); return stop() }   // heard() is too late for the end pause
                 if parakeet { parakeetTick(listeningID) }
                 else if dictating && held >= nextSpeechRollover { nextSpeechRollover += 50; rolloverSpeech(listeningID: listeningID) }
@@ -3354,10 +3527,22 @@ final class App: NSObject {
                 if !toggleTalk && !clickTalk && !f.isEmpty && !NSEvent.modifierFlags.isSuperset(of: f) { if dictating { dictateShortcut(false) } else { t.invalidate(); stop() } }
             }
         }
+        guard let carry else { return engine.start(device, sampleRate: want.sampleRate, onBuffer, completion: ready) }
+        wakeCarry = nil; (engine, wakeMic) = (wakeMic, engine)   // the wake listener's mic, still open: no gap while the box appears
+        let audio = wakeAudio
+        engine.handOff({
+            let s = audio.take().dropFirst(Int(carry.from * 16000))
+            guard !s.isEmpty, let b = AVAudioPCMBuffer(pcmFormat: AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!, frameCapacity: AVAudioFrameCount(s.count)) else { return nil }
+            b.frameLength = b.frameCapacity; s.withUnsafeBufferPointer { b.floatChannelData![0].update(from: $0.baseAddress!, count: s.count) }
+            return b
+        }, onBuffer)
+        ready(.success(()))
     }
 
     func heard(_ now: String) {
         guard engine.isRunning || busy else { return }
+        if let w = wakeStrip { wakeHeard = (now, w.early, w.after) }   // finish() logs it: what was heard vs. what the ask kept
+        let now = wakeStrip.map { Self.afterWakeWord(now, early: $0.early, after: $0.after) } ?? now   // a wake word replay: the name is not part of the ask
         if quietFollowUp {
             guard !now.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             quietFollowUp = false
@@ -3374,7 +3559,7 @@ final class App: NSObject {
         }
         js("words", text)
         let wait = pauseWait()   // nil: Parakeet still hears a voice
-        if consumed > 0 { if let n = actedWords() { consumed = n } else { liveRevised = true } }
+        if consumed > 0 { if let n = actedWords() { consumed = n; liveRevised = false } else { liveRevised = true } }   // each new transcript decides: an interim respelling must not lose the rest
         if Prefs.bool("live") {   // instant commands (open, move, search, play) run mid-sentence; the AI still waits for confirmed words
             pause?.cancel()   // only after a pause: "search amazon" mid-word is the start of "search amazon for e-bikes"
             let item = DispatchWorkItem { [weak self] in self?.tryFast() }
@@ -3477,7 +3662,8 @@ final class App: NSObject {
     }
 
     func stop() {
-        guard engine.isRunning, !clickTalk || text.isEmpty == false else { return }
+        let voicedEarly = parakeetListen && text.isEmpty && parakeetVoice > began   // Parakeet still loading: its final pass has the words
+        guard engine.isRunning, !clickTalk || text.isEmpty == false || voicedEarly else { return }
         let inputs = speechInputs
         if dictating { dictateSeconds = Date().timeIntervalSince(began); dictateReleased = Date(); startDictateAhead() }   // cleanup runs while the last words finalize
         var parakeetFlush: (() -> Void)?   // Parakeet's last pass waits for the mic's last buffer
@@ -3499,12 +3685,13 @@ final class App: NSObject {
             else {
                 if let old = offerText { let partial = text; text = old; offerText = nil; busy = proc?.isRunning == true; picking ? js("pickHear") : js("draft", partial); return }   // a drawing reply has no worker; a card's keeps waiting
                 if dictating { hush(); cue("soundStop"); return hide(after: 0.2) }
+                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { NSLog("Listen: the final pass found no words") }
                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { hush(); js("msg", ""); return hide(after: 0.2) }   // nothing to review
                 review("Couldn’t confirm your words. Check them and press Return.")
             }
         }
         if parakeetListen {   // Parakeet: one last pass over the audio no final pass has taken; the wait grows with the audio left
-            let id = listenID, wait = min(15, 4 + 0.15 * (parakeetAudio.seconds + parakeetQueued))
+            let id = listenID, wait = text.isEmpty ? 20 : min(15, 4 + 0.15 * (parakeetAudio.seconds + parakeetQueued))   // no live words yet: the model is still loading
             parakeetFlush = { [weak self] in self?.parakeetFinal(id) { ok in once(ok && self?.speechFailed == false) } }
             DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
                 guard let self, g == stops else { return }
@@ -3886,12 +4073,13 @@ final class App: NSObject {
             }
             js("respond", response); return
         }
-        if handsFree && Self.endsChat(text) { cue("soundStop"); return close(clear: false) }
+        if handsFree && (Self.endsChat(text) || Self.cancelsAtEnd(text)) { cue("soundStop"); return close(clear: false) }
         if fastBusy || selectionPending {
             let g = stops
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [self] in if g == stops { finish() } }; return
         }
         aheadItem?.cancel()
+        if let h = wakeHeard { wakeHeard = nil; NSLog("Wake word ask: heard \"%@\" (%@, name followed by %@) -> \"%@\"", h.raw, h.early ? "2 s back" : "after the name", h.after.joined(separator: " "), text) }
         if liveRevised {
             hush(); js("msg", "Your words changed after Aurel acted. Check them, then press Return.")
             pinned = true; panel.makeKey(); panel.makeFirstResponder(boxView); js("draft", text)
@@ -3983,11 +4171,12 @@ final class App: NSObject {
                         if self.mode == "draft" && target && (now || Prefs.str("draftInsert") == "auto") { self.applyReplacement() }
                         continue
                     }
+                    if line == "🔊" { self.readAloud = true; continue }
                     if line.hasPrefix("✓") {
                         let result = self.replacement.flatMap { $0.isEmpty ? nil : $0 } ?? line.dropFirst(2).replacingOccurrences(of: "\u{2028}", with: "\n")
                         let finish = self.drawing.request?.steps.count == 1 ? "Done. It’s on your screen." : "Done. Steps are on screen."
                         self.mini.finish(); self.answer = "✓ " + (guided ? finish : result); self.js("line", self.answer)
-                        self.deliver(guided ? finish : result, aloud: !guided); continue   // after the line: finding the read-aloud voice must not delay the answer; a guide's steps speak for themselves
+                        self.deliver(guided ? finish : result, aloud: !guided, force: self.readAloud); self.readAloud = false; continue   // after the line: finding the read-aloud voice must not delay the answer; a guide's steps speak for themselves
                     }
                     if line.hasPrefix("! ") { self.js("msg", String(line.dropFirst(2))) }
                     else { self.js("line", line) }
@@ -4834,15 +5023,15 @@ struct AgentSidebar: View {
         let match = { (s: String) in query.isEmpty || s.localizedCaseInsensitiveContains(query) }
         let ordered = m.rows.filter { match($0.title) }.sorted { $0.num("created") > $1.num("created") }
         let now = ordered.filter { $0.live || $0.status == "offered" }, past = ordered.filter { !($0.live || $0.status == "offered") }
-        let saved = m.named.filter { match($0["name"] as? String ?? "") }, chats = m.chats.filter { match($0.title) }
+        let saved = m.named.filter { match($0["name"] as? String ?? "") }
+        let history = (past + m.chats.filter { match($0.title) }).sorted { $0.num("created") > $1.num("created") }   // finished agents and chats together; the icon tells them apart
         List(selection: Binding(get: { m.current?.id }, set: { m.picked = $0 ?? ""; m.composing = false; m.asked = "" })) {
             if !now.isEmpty { section("now", "In Progress") { ForEach(now) { agentRow($0) } } }
             if !saved.isEmpty { section("saved", "Saved Agents") { ForEach(saved.indices, id: \.self) { savedRow(saved[$0]) } } }
-            if !past.isEmpty {
-                section("past", "Earlier", menu: AnyView(Menu { Button("Clear Done") { m.command("clear", "") }; Button("Clear Failed") { m.command("clear-failed", "") } } label: { Image(systemName: "ellipsis.circle") }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Clear finished agents"))) { ForEach(past) { agentRow($0) } }
+            if !history.isEmpty {
+                section("past", "History", menu: AnyView(Menu { Button("Clear Done") { m.command("clear", "") }; Button("Clear Failed") { m.command("clear-failed", "") } } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Clear finished agents")), folds: false) { ForEach(history) { r in if r.status.isEmpty { chatRow(r) } else { agentRow(r) } } }   // a chat has no status
             }
-            if !chats.isEmpty { section("chats", "Chats") { ForEach(chats) { chatRow($0) } } }
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -4856,14 +5045,17 @@ struct AgentSidebar: View {
             }.padding(.horizontal, 10).padding(.bottom, 4)
         }
         .overlay {
-            if now.isEmpty && past.isEmpty && saved.isEmpty && chats.isEmpty {
+            if now.isEmpty && saved.isEmpty && history.isEmpty {
                 VStack(spacing: 4) { Image(systemName: query.isEmpty ? "sparkles" : "magnifyingglass").font(.title2).foregroundStyle(.tertiary); Text(query.isEmpty ? "No agents yet" : "No matches").foregroundStyle(.secondary) }
             }
         }
     }
-    func section<V: View>(_ key: String, _ title: String, menu: AnyView? = nil, @ViewBuilder _ rows: () -> V) -> some View {
-        Section(isExpanded: Binding(get: { !folded.contains(key) }, set: { if $0 { folded.remove(key) } else { folded.insert(key) } })) { rows() } header: {
-            HStack { Text(title); Spacer(); menu }
+    @ViewBuilder func section<V: View>(_ key: String, _ title: String, menu: AnyView? = nil, folds: Bool = true, @ViewBuilder _ rows: () -> V) -> some View {
+        let header = HStack { Text(title); Spacer(); menu }
+        if folds {
+            Section(isExpanded: Binding(get: { !folded.contains(key) }, set: { if $0 { folded.remove(key) } else { folded.insert(key) } })) { rows() } header: { header }
+        } else {
+            Section { rows() } header: { header }   // no disclosure chevron
         }
     }
     func line(_ icon: AgentIcon, _ title: String, _ when: String, _ sub: @escaping () -> String) -> some View {
@@ -5107,7 +5299,8 @@ struct AgentDetail: View {
         let count = steps.reduce(0) { $0 + $1.lines.count }, sites = Set(steps.flatMap { $0.sources.compactMap { $0["url"] as? String } }).count
         let open = Binding(get: { m.folds[r.id] ?? r.live }, set: { m.folds[r.id] = $0 })
         return DisclosureGroup(isExpanded: open) {
-            VStack(alignment: .leading, spacing: 0) { ForEach(steps.indices, id: \.self) { entry(r, steps[$0], $0, last: $0 == steps.count - 1) } }.padding(.top, 8)
+            VStack(alignment: .leading, spacing: 0) { ForEach(steps.indices, id: \.self) { entry(r, steps[$0], $0, last: $0 == steps.count - 1) } }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)   // DisclosureGroup centers content narrower than it
         } label: {
             HStack(spacing: 7) {
                 Text("ACTIVITY").font(.system(size: 10.5, weight: .semibold)).kerning(0.3)
@@ -5121,7 +5314,7 @@ struct AgentDetail: View {
             let key = r.id + ":\(i)", more = g.lines.count > 1 || g.tools.contains { !$0.isEmpty }, working = last && r.live
             HStack(alignment: .top, spacing: 9) {
                 Group { if g.kind == "note" { Circle().fill(.tertiary).frame(width: 5, height: 5) } else { Image(systemName: AgentStep.symbols[g.kind] ?? "wrench.and.screwdriver").font(.system(size: 11)) } }
-                    .frame(width: 23, height: 23).background(g.kind == "note" ? Color.clear : .primary.opacity(0.08), in: Circle())
+                    .frame(width: 23, height: g.kind == "note" ? 15 : 23).background(g.kind == "note" ? Color.clear : .primary.opacity(0.08), in: Circle())   // a note's dot sits on its first line, not 23pt tall
                     .foregroundStyle(working ? Color.accentColor : g.kind == "made" ? .green : .secondary)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 7) {
@@ -5131,7 +5324,7 @@ struct AgentDetail: View {
                             Button { if m.opened.contains(key) { m.opened.remove(key) } else { m.opened.insert(key) } } label: { Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).rotationEffect(.degrees(m.opened.contains(key) ? 90 : 0)) }
                                 .buttonStyle(.plain).foregroundStyle(.tertiary).help("Show steps")
                         }
-                    }.frame(minHeight: 23)
+                    }.frame(minHeight: g.kind == "note" ? 15 : 23)   // a one-line note sits as high as a longer one, so every gap reads 10pt
                     if m.opened.contains(key) {
                         VStack(alignment: .leading, spacing: 3) {
                             ForEach(g.lines.indices, id: \.self) { j in (Text(g.lines[j] + " ") + Text(g.tools.indices.contains(j) ? g.tools[j] : "").font(.system(size: 10.5, design: .monospaced))).font(.system(size: 11.5)).foregroundStyle(.tertiary).textSelection(.enabled) }
@@ -6642,6 +6835,16 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         case "forget", "remember":
             guard let line = b["line"] as? String else { return }
             DispatchQueue.global().async { [weak self] in self?.helper(["--" + what, line]); DispatchQueue.main.async { self?.refresh() } }
+        case "writing":   // How I write, saved whole; a refusal (too long) comes back as a notice
+            guard let text = b["text"] as? String else { return }
+            DispatchQueue.global().async { [weak self] in
+                let p = py(["--writing", "set", text]), out = Pipe(); p.standardOutput = out
+                try? p.run(); let said = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self); p.waitUntilExit()
+                DispatchQueue.main.async {
+                    if said.hasPrefix("not saved") { self?.send("notice", ["text": "Couldn’t save: " + said.dropFirst(11).trimmingCharacters(in: .whitespacesAndNewlines)]) }
+                    self?.refresh()
+                }
+            }
         case "rule":   // a rule edited in place
             guard let old = b["old"] as? String, let text = b["text"] as? String else { return }
             DispatchQueue.global().async { [weak self] in self?.helper(["--rule", old, text]); DispatchQueue.main.async { self?.refresh() } }
@@ -7008,7 +7211,8 @@ enum Hands {
         let (_, w) = try root(a)
         return ["identity": documentIdentity(a,w), "app": a.localizedName ?? "app", "window": mask(name(w))]
     }
-    static func read(_ a: NSRunningApplication, more: Bool = false, head: Bool = false) throws -> [String: Any] {
+    // tail: the window's last text first (a chat's newest messages), bounded, no continuation
+    static func read(_ a: NSRunningApplication, more: Bool = false, tail: Bool = false, head: Bool = false) throws -> [String: Any] {
         let (_, w) = try root(a)
         let file = state.deletingLastPathComponent().appendingPathComponent("document-read.json")
         let identity = documentIdentity(a,w)
@@ -7042,6 +7246,7 @@ enum Hands {
         }
         func orderedPaths(_ item: AXUIElement, _ path: [Int]) -> [[Int]] {
             let items = attribute(item, kAXChildrenAttribute) as? [AXUIElement] ?? []
+            if tail { return items.indices.reversed().map { path + [$0] } }
             let ranked = items.indices.map { index -> (Int,Int,Double) in
                 let child = items[index]
                 let role = attribute(child,kAXRoleAttribute) as? String ?? "", area = frame(child).width * frame(child).height
@@ -7051,14 +7256,14 @@ enum Hands {
             }
             return ranked.sorted { $0.1 == $1.1 ? $0.2 > $1.2 : $0.1 < $1.1 }.map { path + [$0.0] }
         }
-        let start = Date(), limit = head ? 1500 : 16000, seconds = head ? 0.32 : 5.0
+        let start = Date(), limit = head ? 1500 : tail ? 6000 : 16000, seconds = head ? 0.32 : tail ? 1.5 : 5.0
         var cursor = 0, texts: [String] = [], size = 0, page = "", hasWeb = false
         while cursor < paths.count && size < limit && Date().timeIntervalSince(start) < seconds {
             try checkStopped()
             let path = paths[cursor]; cursor += 1
-            let item = try resolvePath(path)
+            guard let item = tail ? try? resolvePath(path) : try resolvePath(path) else { continue }   // tail: a chat updating mid-read skips that part
             if !seen.insert(item).inserted { continue }
-            if !head { guards.append(["path": path, "signature": signature(item)]) }
+            if !head && !tail { guards.append(["path": path, "signature": signature(item)]) }
             let role = attribute(item, kAXRoleAttribute) as? String ?? ""
             let label = [kAXTitleAttribute, kAXDescriptionAttribute, "AXLabel", kAXHelpAttribute, "AXPlaceholderValue"].compactMap { attribute(item, $0) as? String }.first(where: { !$0.isEmpty }) ?? ""
             if role == "AXSecureTextField" || attribute(item, kAXSubroleAttribute) as? String == "AXSecureTextField" ||
@@ -7084,7 +7289,8 @@ enum Hands {
                 paths.insert(contentsOf:orderedPaths(item,path),at:cursor)
             }
         }
-        if !head {
+        if tail { texts.reverse() }
+        if !head && !tail {
             let boundedGuards = guards.count <= 64 ? guards : [guards[0]] + guards.suffix(63)
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONSerialization.data(withJSONObject: ["identity": identity, "paths": Array(paths.dropFirst(cursor)), "guards": boundedGuards]).write(to: file, options: .atomic)
@@ -7944,9 +8150,9 @@ enum Hands {
                 print(String(data: try JSONSerialization.data(withJSONObject: identify(try app(input.count > 1 ? input[1] : nil))), encoding: .utf8)!); return 0
             }
             if input.first == "read" {
-                guard input.count <= 3 && (input.count < 3 || input[2] == "more") else { throw Failure("Use read [app] [more].") }
+                guard input.count <= 3 && (input.count < 3 || ["more", "tail"].contains(input[2])) else { throw Failure("Use read [app] [more|tail].") }
                 try trusted()
-                let text = try read(try app(input.count > 1 ? input[1] : nil), more: input.count == 3, head: env["AUREL_HANDS_HEAD"] == "1")
+                let text = try read(try app(input.count > 1 ? input[1] : nil), more: input.count == 3 && input[2] == "more", tail: input.count == 3 && input[2] == "tail", head: env["AUREL_HANDS_HEAD"] == "1")
                 print(String(data: try JSONSerialization.data(withJSONObject: text), encoding: .utf8)!); return 0
             }
             try validate(input); try trusted()
@@ -8255,7 +8461,7 @@ func callAppsOnMic() -> Set<String> {   // names of call apps whose audio input 
     })
 }
 let app = App()
-RunLoop.main.add(Timer(timeInterval: 1, repeats: true) { _ in app.wakeTick() }, forMode: .common)   // also while the box tracks a click or its field
+RunLoop.main.add(Timer(timeInterval: 1, repeats: true) { _ in app.wakeTick(); app.stopTick() }, forMode: .common)   // also while the box tracks a click or its field
 let agentsUI = AgentPanels()
 let routineWake = RoutineWake()
 let onboarding = Onboarding()

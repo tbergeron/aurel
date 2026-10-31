@@ -605,8 +605,30 @@ let box = Harness(); box.pillOn = false; box.pinned = true; box.hide(after: 0); 
 precondition(box.log.isEmpty, "a pinned box changed: \(box.log)")
 for words in ["Aurel", "HEY AUREL!", "hello, Aurel, help", "aurel’s", "Aural", "hey Orel", "Oriel", "Auriel", "Aurelle", "Orell", "hey Laurel", "Hey, oral", "OK Ariel"] { precondition(Harness.hasWakeWord(words), words) }
 for words in ["hey", "atticus", "oral", "aureles", "xaurel", "aurel2", "éaurel", "aurel_foo", "oral surgery", "Laurel Canyon", "the Ariel font", "moral", "coral", "Orelia"] { precondition(!Harness.hasWakeWord(words), words) }
-for words in ["Close.", "close", "Stop listening", "That’s all, thanks.", "OK, bye!", "Goodbye Aurel", "never mind"] { precondition(Harness.endsChat(words), words) }
-for words in ["Close Safari.", "Stop the music", "Open Muse.", "Bye, and send it to Sam", ""] { precondition(!Harness.endsChat(words), words) }
+for (said, early, after, ask) in [
+    ("Aurel, open Fastmail", true, [], "open Fastmail"), ("so yeah hey Aurel open Fastmail?", true, [], "open Fastmail?"), ("Aurel", true, [], ""),
+    ("RL switch to cloud code", true, [], "switch to cloud code"), ("R. L. switch to cloud code", true, [], "switch to cloud code"),
+    ("um Earl, open Mail", true, [], "open Mail"), ("Marl, switch to Claude.", true, [], "switch to Claude."), ("Hey Carl open Mail", true, [], "open Mail"),
+    ("All right.", true, [], ""), ("All right open Mail", true, [], "open Mail"), ("Alright, open Mail", true, [], "open Mail"),
+    ("Hey, Mario, play music", true, [], "play music"), ("Barrel open Notes", true, [], "open Notes"),   // the first thing said is the name
+    ("Oreo open Notes", true, [], "open Notes"), ("Arrow. What time is it?", true, [], "What time is it?"),
+    ("All tell Muse wait a moment", true, ["tell", "muse"], "tell Muse wait a moment"), ("Tell Muse wait a moment", true, ["tell", "muse"], "Tell Muse wait a moment"),
+    ("so all right tell muse hi", true, ["tell", "muse"], "tell muse hi"),   // words the wake listener heard after the name mark the start
+    ("Tell Muse what is needed for the variant analysis.", true, [], "Tell Muse what is needed for the variant analysis."),   // the name came too late for the replay: nothing to drop
+    ("Open Safari.", true, [], "Open Safari."), ("What time is it?", true, [], "What time is it?"), ("Tell Muse, hi", true, [], "Tell Muse, hi"),
+    ("Search for flights", true, [], "Search for flights"), ("Order a pizza", true, [], "Order a pizza"), ("Turn off Wi-Fi.", true, [], "Turn off Wi-Fi."),
+    ("open Fastmail", false, [], "open Fastmail"), ("RL open Fastmail", false, [], "open Fastmail"), ("open Aurel settings", false, [], "open Aurel settings"),
+    ("open URL", false, [], "open URL"), ("Read my email", false, [], "Read my email"), ("Remind me at 5", false, [], "Remind me at 5")] {
+    precondition(Harness.afterWakeWord(said, early: early, after: after) == ask, "\(said) → \(Harness.afterWakeWord(said, early: early, after: after))")
+}
+for words in ["Close.", "close", "Stop listening", "That’s all, thanks.", "OK, bye!", "Goodbye Aurel", "never mind", "Nevermind.", "Oh, never mind.", "No, sorry, never mind", "Forget it", "Sorry, not you.", "I wasn't talking to you", "Cancel."] { precondition(Harness.endsChat(words), words) }
+for words in ["Close Safari.", "Stop the music", "Open Muse.", "Bye, and send it to Sam", "", "Cancel my 3 pm meeting", "never mind the email, open Muse"] { precondition(!Harness.endsChat(words), words) }
+for words in ["Aurel, stop.", "Aurel shut up", "shut up Aurel", "Okay Aurel, that's enough", "Aurel please stop", "hey Aurel be quiet", "Stop it, Aurel!", "Aurel… stop talking"] { precondition(Harness.saysStop(words), words) }
+for words in ["stop", "shut up", "Aurel", "Aurel's stopwatch", "to stop it, open the timer in Aurel's settings", "Laurel Canyon, stop by", "it will stop when the rain ends"] { precondition(!Harness.saysStop(words), words) }
+for words in ["So anyway, I told him. Never mind.", "Tell Muse that. Oh, never mind.", "blah blah. Not you, Aurel.", "Open Safari. Forget it!", "We should go. Sorry, I wasn't talking to you."] { precondition(Harness.cancelsAtEnd(words), words) }
+for words in ["Tell Muse never mind", "tell Muse, never mind.", "Never mind.", "Open Safari. Then search for flights.", "Cancel my meeting. Thanks.", ""] { precondition(!Harness.cancelsAtEnd(words), words) }
+for words in ["Aurel, never mind", "Aurel nevermind", "never mind Aurel", "Aurel cancel", "Aurel, not you", "Aurel stop"] { precondition(Harness.saysCancel(words), words) }
+for words in ["never mind", "cancel the meeting", "Aurel open Safari", "it's not you"] { precondition(!Harness.saysCancel(words), words) }
 print("pill gives the box back")
 '''
         self.assertIn('pill gives the box back', run_swift(self, swift))

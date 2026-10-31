@@ -245,7 +245,8 @@ final class Harness {
  var selectionID = 0, selectionPending = false, selection: TextSelection?, messages: [String] = []
  var warm: Int? = 1, warmSel = "", respawns = 0
  var busy = true, fastBusy = false, stops = 0, finished = 0
- var offerText: String?, text = "Original request"
+ var offerText: String?, text = "Original request", handsFree = false
+ static func endsChat(_ s: String) -> Bool { false }; static func cancelsAtEnd(_ s: String) -> Bool { false }; func cue(_ s: String) {}; func close(clear: Bool) {}
  func unwarm() { warm = nil }
  func spawn() -> Int? { respawns += 1; warmSel = selection?.text ?? ""; return 1 }
  func js(_ call: String, _ text: String) { messages.append(text) }

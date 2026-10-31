@@ -213,7 +213,7 @@ struct AnswerStyle {
             if bold { t = t.fontWeight(.semibold).foregroundColor(style.strong) }
             if italic { t = t.italic() }
             if mono { t = t.font(.system(size: style.code, design: .monospaced)) }
-            if let link { t = t.foregroundColor(Color(hex: 0x64d2ff)).customAttribute(LinkKey(url: link)) }
+            if let link { t = t.foregroundColor(BX.link).customAttribute(LinkKey(url: link)) }
             parts.append(t); cur = ""
         }
         for ch in s { if ch == " " || ch == "\t" { flush(); parts.append(Text(String(ch))) } else { cur.append(ch) } }
@@ -302,7 +302,8 @@ struct AnswerView: View {
     var body: some View {
         let still = reveal == nil || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || UIClock.frozen != nil
         TimelineView(.animation(minimumInterval: nil, paused: still || (reveal?.done ?? true))) { tl in
-            let now = UIClock.frozen.map { _ in 1e12 } ?? tl.date.timeIntervalSinceReferenceDate - Date().timeIntervalSinceReferenceDate + CACurrentMediaTime()
+            // done: fully drawn; a paused timeline keeps its last frame's date, which can be mid-fade and leave the words blurred
+            let now = UIClock.frozen != nil || reveal?.done ?? true ? 1e12 : tl.date.timeIntervalSinceReferenceDate - Date().timeIntervalSinceReferenceDate + CACurrentMediaTime()
             Blocks(blocks: blocks, style: style, at: reveal?.at ?? [], now: now, still: still, onLink: onLink)
         }
     }
@@ -344,7 +345,7 @@ private struct Blocks: View {
             return AnyView(VStack(alignment: .leading, spacing: 6) {
                 ForEach(rows.indices, id: \.self) { k in
                     HStack(alignment: .firstTextBaseline, spacing: 0) {
-                        Text(ordered ? "\(start + k)." : "•").font(cssFont(style.size)).foregroundColor(Color(hex: 0xc7c7cc)).frame(width: 22, alignment: ordered ? .trailing : .center).padding(.trailing, 6)
+                        Text(ordered ? "\(start + k)." : "•").font(cssFont(style.size)).foregroundColor(BX.fg2).frame(width: 22, alignment: ordered ? .trailing : .center).padding(.trailing, 6)
                             .opacity(fade(rows[k].1))
                         para(rows[k].0, size: style.size, lh: style.lh)
                     }
@@ -380,7 +381,7 @@ private struct Blocks: View {
         }
     }
     func cell(_ t: Text, header: Bool, last: Bool, first: Int) -> some View {   // its border fades in with its first word
-        linked(t.font(cssFont(header ? 11.5 : 13, header ? 600 : 400)).foregroundColor(header ? Color(hex: 0xc7c7cc) : style.color).lineHeight(13, 1.45))
+        linked(t.font(cssFont(header ? 11.5 : 13, header ? 600 : 400)).foregroundColor(header ? BX.fg2 : style.color).lineHeight(13, 1.45))
             .padding(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 12))
             .overlay(alignment: .bottom) { if !last || header { Rectangle().fill(Color.white(0.1)).frame(height: 0.5).opacity(fade(first)) } }
     }

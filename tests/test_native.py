@@ -332,6 +332,8 @@ check("O Pen Muse.", "open", 2)        // "Open" heard again as "O Pen": the sam
 check("O Pen Muse.", "open muse", 3)
 check("Open Muse, then type hi", "open muse", 2)
 check("Close Muse.", "open muse", nil)  // really changed: check and press Return
+check("open Muse's tell Muse, okay, please wait.", "open muse", 2)   // kept talking: "Muse." heard as "Muse's"
+check("Open muses tell Muse", "open muse", nil)   // a different word, not a possessive
 print("respelling ok")
 ''')
         self.assertIn('respelling ok', out)
@@ -349,6 +351,7 @@ final class Harness {
     var drawingReply = false; let drawing = DrawingStub()
     func typed(_ text: String, heard: Bool = false) { request = text }
     var busy = true, selectionPending = false, fastBusy = false, liveRevised = false, pinned = false, guardUntil = Date.distantPast
+    var wakeHeard: (raw: String, early: Bool, after: [String])?
     var offerText: String?, text = "Fixture left, Other right", ahead = "", answer = ""
     var did = ["Fixture: left."], consumed = 2, stops = 0, boxView = 0
     var proc: Process?, aheadItem: DispatchWorkItem?, commit = "", lastDone = Date()
@@ -363,6 +366,7 @@ final class Harness {
     func deliver(_ text: String) { delivered = text }
     var closed = false; func close(clear: Bool) { closed = true }
     static func endsChat(_ t: String) -> Bool { t == "close" }
+    static func cancelsAtEnd(_ t: String) -> Bool { false }
 ''' + finish + '''}
 func transcriptKey(_ t: String) -> String { t.lowercased() }
 let guide = Harness(); guide.offerText = "Original teaching request"; guide.text = "next"; guide.drawingReply = true; guide.finish()
@@ -457,6 +461,7 @@ final class Harness {
     static var keysUp = Date(); func gone() {}; func unwarm() {}
     var quietFollowUp = false
     var handsFree = false, followUp = false
+    var parakeetListen = false, parakeetVoice = Date.distantPast
     func stopWake() {}
     var drawingReply = false; let drawing = DrawingStub()
     let engine = Engine(), panel = Panel(), quietAudio = QuietAudio()

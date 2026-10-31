@@ -215,25 +215,23 @@ for (call, arg) in calls {
         # the streamed words reuse the answer's fade, and Reduce Motion turns it off
         self.assertIn('let still = reveal == nil || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion', (ROOT / 'Answer.swift').read_text())
 
-    def test_streamed_words_fade_in_once_and_the_box_keeps_the_answers_start_in_view(self):
+    def test_streamed_words_fade_in_once_and_the_box_follows_the_newest_words(self):
         self.box(r"""
 func long(_ n: Int) -> String { (0..<n).map { "w\($0)" }.joined(separator: " ") }
-let a = m.answerID(m.turns.count - 1)!
-scrolls = []; var t0 = CACurrentMediaTime(); line("… " + long(6)); let first = turn.reveal.at
+scrolls = 0; var t0 = CACurrentMediaTime(); line("… " + long(6)); let first = turn.reveal.at
 precondition(turn.reveal.words == (0..<5).map { "w\($0)" } && first[0] >= t0 && first[0] <= CACurrentMediaTime(), "the first words fade in, the first at once")
-precondition(scrolls.count == 1 && scrolls[0].0 == a && scrolls[0].1, "following: the box keeps the answer's start in view, not the bottom")
+precondition(scrolls == 1, "following: the newest words stay in view")
 Thread.sleep(forTimeInterval: 0.3); t0 = CACurrentMediaTime(); line("… " + long(20)); let next = turn.reveal.at
 precondition(Array(next.prefix(5)) == first, "words on screen keep their moment and are not animated again")
 precondition(next.count == 19 && next[5] >= t0, "only the new words fade in, the first of them at once")
-precondition(scrolls.count == 2 && scrolls[1].0 == a && scrolls[1].1, "it stays at the start while more arrives")
-m.atBottom = false; scrolls = []; line("… " + long(45)); precondition(scrolls.isEmpty, "the user scrolled away: stays there")
+precondition(scrolls == 2 && m.atBottom, "it keeps following while more arrives, even past a full box")
+m.atBottom = false; scrolls = 0; line("… " + long(45)); precondition(scrolls == 0, "the user scrolled away: stays there")
 let shownAt = turn.reveal.at; Thread.sleep(forTimeInterval: 0.3); t0 = CACurrentMediaTime(); line("✓ " + long(45) + " end."); let done = turn.reveal.at
 precondition(Array(done.prefix(44)) == shownAt, "the final reply never re-fades words already shown")
 precondition(done.count == 46 && Array(turn.reveal.words.suffix(2)) == ["w44", "end."] && done[44] >= t0, "only its words not yet shown fade in")
-precondition(scrolls.isEmpty, "the final reply does not jump")
+precondition(scrolls == 0, "the final reply does not jump")
 """)
-        # The page let a full box stop at the answer's start (atBottom = start >= end) and the user's own wheel clear atBottom,
-        # so later lines never pulled a reader up or down. Natively something must clear it the same way.
+        # The user's own scroll clears atBottom, so later lines never pull a reader back down.
         self.assertTrue(re.search(r'atBottom\s*=(?!=)(?!\s*true\b)', (ROOT / 'Box.swift').read_text()), 'nothing ever clears BoxModel.atBottom')
 
     def test_a_long_streamed_answer_fades_in_reading_order_once(self):

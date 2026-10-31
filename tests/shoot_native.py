@@ -20,7 +20,7 @@ PREFS = {'hotkeyLabel': '⌃⌥Space', 'login': True, 'paused': False, 'volume':
          'learnMe': True, 'tips': True, 'draw': True, 'dictateMode': 'verbatim',
          'dictateHotkeyLabel': '', 'dictateHistory': True, 'input': 'voice', 'talkMode': 'hold', 'speechModel': 'speech'}
 STATE = {'today': {'asks': 3, 'usd': .004, 'secs': 3}, 'week': {'asks': 21, 'usd': .03, 'secs': 3.4}, 'all': {'asks': 140, 'usd': .2, 'secs': 3.8},
-         'rules': ['When I say focus mode, close Slack and open Notes'], 'skills': [{'say': 'standup', 'reply': 'Opened Zoom and the standup notes'}],
+         'rules': ['When I say focus mode, close Slack and open Notes'], 'writing': 'Short and casual. No greeting, sign off with “T”.', 'skills': [{'say': 'standup', 'reply': 'Opened Zoom and the standup notes'}],
          'me': {'facts': [{'id': 'f1', 'category': 'basics', 'kind': 'name', 'value': 'Sam', 'source': 'you', 'date': 'Oct 19'}]}, 'plan': {'ok': True, 'text': 'Signed in. Claude Max.'},
          'asks': [{'at': '2026-10-19 09:30:00', 'task': 'weather tomorrow', 'reply': 'Sunny, 68°F.'}, {'at': '2026-10-19 08:10:00', 'task': 'open my notes', 'reply': 'Opened Notes.'}]}
 ROUTINES = [{'id': 'r1', 'kind': 'time', 'at': '08:00', 'days': 'weekdays', 'ask': 'Summarize my calendar', 'mode': 'cheapest'}]

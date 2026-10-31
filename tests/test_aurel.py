@@ -280,6 +280,87 @@ class BrainTests(unittest.TestCase):
         self.assertEqual(log.call_args.args[0],'Original request')
         self.assertEqual(log.call_args.kwargs['attempt_usd'],[])
 
+    def test_a_reply_box_ask_for_writing_gets_the_screenshot_and_others_do_not(self):
+        with patch.dict(os.environ, {'AUREL_CARET': '1'}), patch.object(aurel, 'pref', side_effect=lambda k, d: d):
+            self.assertTrue(aurel.caret_draft())   # key-down: start the capture
+            for ask in ('Draft my reply', 'reply saying yes', 'write back that I can make it', 'Answer this email', 'compose a response'):
+                self.assertTrue(aurel.caret_draft(ask), ask)
+            for ask in ('open Safari', 'what time is it in Tokyo', 'summarize this'):
+                self.assertFalse(aurel.caret_draft(ask), ask)
+        with patch.dict(os.environ, {'AUREL_CARET': '1'}), patch.object(aurel, 'pref', side_effect=lambda k, d: False if k == 'selection' else d):
+            self.assertFalse(aurel.caret_draft('Draft my reply'))   # Settings: selection off
+        with patch.dict(os.environ, {'AUREL_CARET': ''}):
+            self.assertFalse(aurel.caret_draft('Draft my reply'))   # no text box focused
+
+    def test_only_writing_asks_and_draft_corrections_carry_how_i_write(self):
+        draft = [{'t': time.time(), 'q': 'draft my reply', 'a': 'sounds good!', 'draft': True}]
+        with patch.object(aurel, 'writing_style', return_value='casual, lowercase'), patch.dict(os.environ, {'AUREL_CARET': ''}):
+            for ask, turns in (('Draft a reply to Dana', []), ('write back that I can make it', []), ('make it shorter', draft)):
+                context = aurel.writing_context(ask, turns)
+                self.assertIn('casual, lowercase', context, ask); self.assertIn('--writing add', context, ask)
+                self.assertNotIn('visible in this thread', context, ask)   # no reply box focused: nothing on screen to copy
+            for ask, turns in (('open Safari', []), ('make it shorter', [{**draft[0], 'draft': False}])):
+                self.assertEqual(aurel.writing_context(ask, turns), '', ask)
+        with patch.object(aurel, 'writing_style', return_value=''), patch.dict(os.environ, {'AUREL_CARET': '1'}), \
+             patch.object(aurel, 'pref', side_effect=lambda k, d: d):
+            context = aurel.writing_context('reply saying yes', [])
+            self.assertIn('visible in this thread', context); self.assertNotIn('How the user writes', context)
+
+    def test_on_local_only_a_draft_sends_an_automatic_screenshot_to_claude(self):
+        shot = [('/tmp/fixture-screen.jpg', 'Screen 1')]
+        def sent(task, client_, caret=''):
+            class NoThread:
+                def __init__(self, target=None, **_): pass
+                def start(self): pass
+                def join(self, *_): pass
+            brain = unittest.mock.Mock(return_value=('Done.', 0, [])); brain.ok = True; brain.cmds = brain.ran = []; brain.observed = []
+            with patch.multiple(aurel, fast=lambda _: None, front=lambda: ('Claude', 'Chat'), osa=lambda *a: '', screens=lambda: [],
+                                describe=lambda *a: '', me_line=lambda: '', selection_context=lambda: '', relevant_rules=lambda _: '',
+                                recent=lambda: [], workflows=lambda *a: '', screen_for=lambda *a: shot, wait_commit=lambda: True, run=brain,
+                                remember_turn=lambda *a: None, restore_focus=lambda *a: None, client=lambda: client_,
+                                remember_workflow=lambda task, reply, *a: (reply, False), learn=lambda *a: False, tip=lambda *a: None), \
+                 patch.object(aurel.threading, 'Thread', NoThread), patch('sys.argv', ['aurel.py', task]), \
+                 patch.dict(os.environ, {'AUREL_CARET': caret}), patch('sys.stdout', io.StringIO()):
+                aurel.main()
+            return list(brain.call_args.args[2])
+        self.assertEqual(sent('switch to Muse and tell it to calm down', 'local', '1'), [])   # unreadable window text: stays on Local
+        self.assertEqual(sent('reply saying yes', 'local', '1'), shot)   # a draft needs to see the email
+        self.assertEqual(sent('what is on my screen', 'claude'), shot)   # Claude sees what it can't read
+        rows = [json.loads(l) for l in open(os.path.join(aurel.DIR, 'trace.jsonl'))]
+        self.assertIn({'kind': 'ask', 'pics': 0, 'front': 'Claude', 'cursor': True}, [{k: r.get(k) for k in ('kind', 'pics', 'front', 'cursor')} for r in rows])
+
+    def test_aloud_reply_reads_another_apps_words_verbatim(self):
+        class NoThread:
+            def __init__(self, target=None, **_): pass
+            def start(self): pass
+            def join(self, *_): pass
+        brain = unittest.mock.Mock(return_value=('[aloud] Sure — **SE-03** is the cleanest new high.', 0, [])); brain.ok = True; brain.cmds = brain.ran = []; brain.observed = []
+        learn = unittest.mock.Mock(return_value=False); out = io.StringIO()
+        with patch.multiple(aurel, fast=lambda _: None, front=lambda: ('Muse', 'Chat'), osa=lambda *a: '', screens=lambda: [],
+                            describe=lambda *a: '', me_line=lambda: '', selection_context=lambda: '', relevant_rules=lambda _: '',
+                            recent=lambda: [], workflows=lambda *a: '', screen_for=lambda *a: [], wait_commit=lambda: True, run=brain,
+                            remember_turn=lambda *a: None, restore_focus=lambda *a: None, client=lambda: 'claude',
+                            remember_workflow=lambda task, reply, *a: (reply, False), learn=learn, tip=lambda *a: None), \
+             patch.object(aurel.threading, 'Thread', NoThread), patch('sys.argv', ['aurel.py', "read Muse's last reply to me"]), \
+             patch.dict(os.environ, {'AUREL_UI': '1'}), patch('sys.stdout', out):
+            aurel.main()
+        lines = out.getvalue().splitlines()
+        self.assertIn('🔊', lines)
+        self.assertEqual(lines[lines.index('🔊') + 1], '✓ Sure — **SE-03** is the cleanest new high.')   # the app's words, unchanged
+        learn.assert_not_called()   # a read is not a shortcut to replay
+
+    def test_trace_keeps_each_event_privately_and_rotates(self):
+        root = tempfile.TemporaryDirectory(); self.addCleanup(root.cleanup)
+        with patch.object(aurel, 'DIR', root.name), patch.dict(os.environ, {'AUREL_ASK': '/tmp/aurel-ask-fixture'}):
+            aurel.trace('tool', command='aurel.py --hands type 3 "hi" submit', out='Typed into "Message"')
+            path = os.path.join(root.name, 'trace.jsonl')
+            row = json.loads(open(path).read())
+            self.assertEqual((row['kind'], row['ask'], row['command']), ('tool', 'aurel-ask-fixture', 'aurel.py --hands type 3 "hi" submit'))
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+            with open(path, 'a') as f: f.write('x' * 10_000_001)
+            aurel.trace('end', status='cancelled')
+            self.assertTrue(os.path.exists(path + '.1')); self.assertEqual(json.loads(open(path).read())['status'], 'cancelled')
+
     def test_summary_deadline_does_not_start_a_late_unused_capture(self):
         class NoThread:
             made = []
@@ -847,6 +928,18 @@ print(json.dumps(aurel.look(cleanup=sys.argv[3] != 'standalone')))
              patch.object(aurel,'say'), patch.object(aurel,'preview_commands'):
             reply,cost,_=aurel.run('Research',p,auto_work=True)
         stop.assert_not_called(); self.assertEqual((reply,cost),('Research complete.',.001)); self.assertTrue(aurel.run.ok)
+
+    def test_a_box_ask_going_in_circles_stops_after_twenty_steps(self):
+        events=[]
+        for n in range(1, 31):   # screenshot, read, press… each resets the idle deadline, so only the count can end it
+            events.extend([{'type':'assistant','message':{'content':[{'type':'tool_use','id':str(n),'name':'Bash','input':{'command':f'fixture step {n}'}}]}},
+                           {'type':'user','message':{'content':[{'type':'tool_result','tool_use_id':str(n),'content':'Still not there'}]}}])
+        p=unittest.mock.Mock(); p.stdin=io.StringIO(); p.ask=''; p.returncode=0; p.stdout=map(json.dumps,events)
+        with patch.object(aurel,'TURN',{}), patch.object(aurel,'stop_claude') as stop, patch.object(aurel,'say'), patch.object(aurel,'preview_commands'):
+            reply,_,_=aurel.run('switch to Muse and tell it to calm down',p)
+        stop.assert_called_once()
+        self.assertEqual(reply, f'I stopped after {aurel.MAX_STEPS} steps without finishing, so nothing more runs. Check what it did before asking again.')
+        self.assertFalse(aurel.run.ok); self.assertEqual(aurel.run.why, 'looping')
 
     def test_failed_tool_can_retry_another_method_on_haiku(self):
         tool = lambda n, command: {'type':'assistant','message':{'content':[{'type':'tool_use','id':str(n),'name':'Bash','input':{'command':command}}]}}

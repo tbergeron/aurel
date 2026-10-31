@@ -71,6 +71,22 @@ sem.wait()
 print("ok")
 """)
 
+    def test_sound_gate_passes_only_sound_with_its_lead_and_tail(self):
+        run_swift(self, engine() + """
+let f = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
+func buf(_ v: Float, _ n: Int = 1600) -> AVAudioPCMBuffer {   // 0.1 s at a level
+    let b = AVAudioPCMBuffer(pcmFormat: f, frameCapacity: AVAudioFrameCount(n))!; b.frameLength = AVAudioFrameCount(n)
+    for i in 0..<n { b.floatChannelData![0][i] = i % 2 == 0 ? v : -v }; return b
+}
+let g = SoundGate(), quiet = buf(0.001), loud = buf(0.05), click = buf(0.05, 320)
+for _ in 0..<5 { precondition(g.pass(click).isEmpty && g.pass(quiet).isEmpty) }   // typing: 20 ms clicks never open it
+for _ in 0..<20 { precondition(g.pass(quiet).isEmpty) }   // 2 s of hiss: nothing reaches the recognizer
+precondition(g.pass(loud).count == 6)   // the word, with the 0.5 s before it
+for _ in 0..<10 { precondition(g.pass(quiet).count == 1) }   // 1 s more after it
+precondition(g.pass(quiet).isEmpty && g.pass(loud).count == 2)   // the lead restarts after the tail
+print("ok")
+""")
+
     def test_serve_answers_in_order_and_survives_a_bad_reply(self):
         root = self.scratch()
         (root / "parakeet").mkdir(); (root / "parakeet" / "v3").write_text("/x")

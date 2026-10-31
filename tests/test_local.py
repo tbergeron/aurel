@@ -65,6 +65,13 @@ class LocalTests(unittest.TestCase):
         self.assertEqual([c.args for c in hands.call_args_list], [('type', '4', 'hello world', 'submit'), ('type', '4', 'hello world')])
         with patch.object(aurel, 'hands_map', return_value={'nodes': [muse['nodes'][1]]}):
             self.assertIsNone(aurel.message_box('Muse'))   # nothing to type into: the full ask takes over
+        unverified = 'Could not verify Return was accepted in the background. Read the window; if it was not sent, click its send button.'
+        with patch.object(aurel, 'fast', return_value='Opened Muse.'), patch.object(aurel, 'app_named', return_value='Muse'), \
+             patch.object(aurel, 'hands_map', return_value=muse), patch.object(aurel, 'hands', return_value=(unverified, False)):
+            self.assertEqual(aurel.route_line('type "please wait." in Muse send', 'Muse'), 'Sent “please wait.” in Muse. I couldn’t confirm it arrived.')   # never sent twice
+        with patch.object(aurel, 'fast', return_value='Opened Muse.'), patch.object(aurel, 'app_named', return_value='Muse'), patch.object(aurel, 'hands_map', return_value=muse), \
+             patch.object(aurel, 'hands', return_value=('Could not see the text land in "Message". Nothing was sent; read the window before typing again.', False)):
+            self.assertIsNone(aurel.route_line('type "please wait." in Muse send', 'Muse'))   # nothing went: the full ask takes over
         for task, line, elsewhere in [('Tell Muse hello world', 'type "hello world" in Muse send', False),
                                       ('Send hello world in Muse', 'type "hello world" in Muse send', False),
                                       ('Say Hello World in Muse.', 'type "Hello World" in Muse send', False),
@@ -73,6 +80,11 @@ class LocalTests(unittest.TestCase):
                                       ('send hello', 'type "hello" send', True),
                                       ('say hello there', 'type "hello there"', False)]:
             self.assertEqual(aurel.quick_send_elsewhere(task, line), elsewhere, task)
+        for task, line, several in [('switch to Muse and tell it, please wait.', 'open Muse', True), ('open Slack then scroll down', 'open Slack', True),
+                                    ('switch to Muse', 'open Muse', False), ('tell Muse I am here and ready', 'type "I am here and ready" in Muse send', False),
+                                    ('Tell Muse I am here And ready', 'type "I am here and ready" in Muse send', False),
+                                    ('open Muse and say hi', 'type "hi" in Muse send', True), ('move Chrome and Safari left', 'move Chrome to left', True)]:
+            self.assertEqual(aurel.several_steps(task, line), several, task)
 
     def test_router_never_types_into_the_front_app_for_an_app_it_cannot_find(self):
         with patch.object(aurel, 'fast') as fast, patch.object(aurel, 'app_named', return_value=None), \
@@ -110,6 +122,10 @@ class LocalTests(unittest.TestCase):
             llm.return_value = 'click 2'
             with patch.object(aurel, 'route_line', return_value='Clicked “Search”.'):
                 self.assertEqual(aurel.local_route('click search'), ('Clicked “Search”.', 'click 2'))
+            llm.return_value = 'open Muse'
+            with patch.object(aurel, 'route_line') as routed:
+                self.assertIsNone(aurel.local_route('switch to Muse and tell it, please wait.'))   # half an ask: the full ask does both steps
+            routed.assert_not_called()
         with patch.object(aurel, 'llm_url', return_value=''):
             self.assertIsNone(aurel.local_route('switch to slack'))   # no model: the full ask decides
 
@@ -169,6 +185,63 @@ class LocalTests(unittest.TestCase):
                  patch.object(aurel, 'run_local', return_value=('ok', 0, [])) as local, patch.object(aurel, 'start_claude', return_value=None), patch.object(aurel, 'say'):
                 aurel.run('what is this', shots=shots)
             self.assertEqual(local.called, local_runs, (prefs, shots))
+
+    def test_reading_another_app_aloud_goes_to_claude(self):
+        for on, task, local_runs in [(True, "Read Muse's last reply to me", False),
+                                     (True, 'read me what Slack says', False),
+                                     (True, 'read this page out loud', False),
+                                     (True, 'what is the weather', True),             # not a read-aloud ask: stays local
+                                     (False, "Read Muse's last reply to me", True)]:  # off (the default): everything stays local
+            prefs = {'client': 'local', 'readWindows': on}
+            with patch.object(aurel, 'pref', side_effect=lambda k, d: prefs.get(k, d)), patch.object(aurel, 'big_ask', return_value=False), \
+                 patch.object(aurel, 'run_local', return_value=('ok', 0, [])) as local, patch.object(aurel, 'start_claude', return_value=None), patch.object(aurel, 'say'):
+                aurel.run(task)
+            self.assertEqual(local.called, local_runs, (on, task))
+
+    def test_read_last_reply_cuts_it_from_the_window_without_claude(self):
+        # Muse's own markers: the reply between "Copy response · Reply" and "React · Reply · More options", its code buttons left out
+        muse = ('Older reply.\nReact\nReply\nMore options\nYou:\nwhat’s next?\nMore options\nCopy response\nReply\n'
+                'Done. The audit is\nDownload file\nCopy Code\nback and SE-03 holds.\nReact\nReply\nMore options\nMessage in Main chat\nSend')
+        # another app: the local model names the lines, Aurel widens them to the buttons around them
+        other = 'Older.\nReply\nYou:\nhi\nReply\nHello there,\nhow can I help?\nReply\nSend'
+        prefs = {'client': 'local'}
+        def ask(app, window, marks=None, said=None):
+            read = aurel.subprocess.CompletedProcess([], 0, json.dumps({'text': window}), '')
+            with patch.object(aurel, 'pref', side_effect=lambda k, d: prefs.get(k, d)), patch.object(aurel, 'app_named', return_value=app), \
+                 patch.object(aurel, 'llm_url', return_value='http://fixture'), patch.object(aurel, 'hands_call', return_value=read) as hands, \
+                 patch.object(aurel, 'llm', return_value=json.dumps(marks)) as llm, patch.object(aurel, 'trace'):
+                reply = aurel.fast(said or f"Read {app}'s last reply to me")
+            return reply, aurel.fast.aloud, hands.call_args, llm.called
+        reply, aloud, call, used_model = ask('Muse', muse)
+        self.assertEqual(reply, 'Done. The audit is\nback and SE-03 holds.')   # word for word, no AI
+        self.assertTrue(aloud); self.assertFalse(used_model)
+        self.assertEqual(call.args[0], ['read', 'Muse', 'tail'])
+        with patch.dict(os.environ, {'AUREL_FRONT': 'Muse'}):   # "its": the app in front, no name to look up
+            self.assertEqual(ask(None, muse, said='Read its last message.')[0], 'Done. The audit is\nback and SE-03 holds.')
+        self.assertEqual(ask('Chat', other, {'first': 5, 'last': 5})[:2], ('Hello there,\nhow can I help?', True))   # the model was a line short
+        self.assertEqual(ask('Chat', other, {'first': 5, 'last': 40})[:2], ("I couldn't find Chat's last reply.", False))   # no such line, no Claude: says so
+        prefs['readWindows'] = True
+        self.assertEqual(ask('Chat', other, {'first': 5, 'last': 4})[:2], (None, False))   # Claude fallback on: Claude takes it
+        prefs['client'] = 'claude'
+        self.assertEqual(ask('Muse', muse)[0], 'Done. The audit is\nback and SE-03 holds.')   # markers need no model, on any client
+        self.assertEqual(ask('Chat', other, {'first': 5, 'last': 5})[:2], (None, False))   # no local model: Claude reads it
+
+    def test_tell_an_open_app_types_and_sends_without_ai(self):
+        sent = []
+        with patch.object(aurel, 'installed_apps', return_value=['Muse', 'ChatGPT', 'Slack', 'News', 'Notes']), \
+             patch.object(aurel, 'running_apps', return_value=['Muse', 'ChatGPT', 'Slack']), patch.object(aurel, 'trace'), \
+             patch.object(aurel, 'route_line', side_effect=lambda line, front: sent.append(line) or 'Sent.') as route, patch.dict(os.environ, {'AUREL_FRONT': 'Muse'}):
+            def tell(said):
+                sent.clear(); return aurel.fast(said), (sent[0] if sent else None)
+            self.assertEqual(tell('Tell Muse Hello World'), ('Sent.', 'type "Hello World" in Muse send'))   # the user's own case
+            self.assertEqual(tell('Atticus tell Muse I am back')[1], 'type "I am back" in Muse send')   # the old name, and "Muse I" is not an app
+            self.assertEqual(tell('R L tell Muse, that I agree.')[1], 'type "I agree." in Muse send')
+            self.assertEqual(tell('Tell mules hi there')[1], 'type "hi there" in Muse send')   # a running app, misheard by a letter or two
+            self.assertEqual(tell('Tell Muse what is needed for the analysis. Um')[1], 'type "what is needed for the analysis" in Muse send')
+            for said in ['tell Sam hi', 'tell Slack I am late', 'tell me a joke', 'send an email to Sam', 'Tell news hello']:
+                self.assertEqual(tell(said), (None, None), said)   # a person, a people chat, no app, an app not open: the full ask
+            with patch.dict(os.environ, {'AUREL_LIVE': '1'}):
+                self.assertEqual(tell('Tell Muse hello'), (None, None))   # mid-sentence: never send half a message
 
     def test_only_big_asks_go_to_claude(self):
         prefs = {'client': 'local', 'bigAsks': 'local'}
@@ -230,11 +303,24 @@ class LocalTests(unittest.TestCase):
             self.assertEqual(aurel.dictate_cleanup('um we need to deploy the app today'), 'We need to deploy the app today.')
         self.assertEqual(llm.call_args.args[0][0]['content'], aurel.DICTATE_SYSTEM)
 
-    def test_key_down_prewarms_both_prompts(self):
-        with patch.object(aurel, 'llm') as llm:
-            aurel.local_prewarm()
-        self.assertEqual([c.args[0][0]['content'][:40] for c in llm.call_args_list], [aurel.ROUTER[:40], aurel.system_prompt(aurel.ASK_FIRST)[:40]])
-        self.assertTrue(all(c.kwargs['max_tokens'] == 1 for c in llm.call_args_list))
+    def test_key_down_reads_the_ask_prompt_once_then_restores_it(self):
+        slots = Path(self.root, 'llm', 'slots'); slots.mkdir(parents=True)
+        (slots / 'ask-stale.bin').write_text('old prompt')
+        saved = []
+        def slot_file(action, name):
+            if action == 'save': (slots / name).write_text('kv'); saved.append(name)
+            return action == 'save' or (slots / name).exists()
+        def warm(url):
+            with patch.object(aurel, 'llm') as llm, patch.object(aurel, 'slot_file', side_effect=slot_file) as slot, patch.object(aurel, 'llm_url', return_value=url):
+                aurel.local_prewarm()
+            return [(c.args[0][0]['content'][:40], c.kwargs.get('slot')) for c in llm.call_args_list], [c.args[0] for c in slot.call_args_list]
+        system = aurel.local_system()[:40]
+        calls, actions = warm('http://one')   # first time: read it into slot 0 and save it; an older settings' copy goes
+        self.assertEqual(calls, [(system, 0), (aurel.ROUTER[:40], 1), (aurel.READ_LAST_PROMPT[:40], 1)])
+        self.assertEqual(actions, ['save']); self.assertEqual([p.name for p in slots.glob('ask-*.bin')], saved)
+        prompts = [(aurel.ROUTER[:40], 1), (aurel.READ_LAST_PROMPT[:40], 1)]
+        self.assertEqual(warm('http://one'), (prompts, []))   # same server: already there, nothing restored or saved
+        self.assertEqual(warm('http://two'), (prompts, ['restore']))   # a reloaded model: from disk, not saved again
 
     def test_local_asks_ask_only_for_risky_commands(self):
         def gate(command):

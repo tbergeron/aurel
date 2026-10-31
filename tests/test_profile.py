@@ -18,7 +18,8 @@ class ProfileTests(unittest.TestCase):
         self.root = Path(root.name)
         self.me = self.root / 'me.json'
         for p in (patch.object(aurel, 'DIR', root.name), patch.object(aurel, 'ME_FILE', str(self.me)),
-                  patch.object(aurel, 'RECENT', str(self.root / 'recent.jsonl')), patch.object(aurel, 'MEMORY', str(self.root / 'memory.md'))):
+                  patch.object(aurel, 'RECENT', str(self.root / 'recent.jsonl')), patch.object(aurel, 'MEMORY', str(self.root / 'memory.md')),
+                  patch.object(aurel, 'STYLE', str(self.root / 'writing.md'))):
             p.start(); self.addCleanup(p.stop)
         self.env = patch.dict(os.environ, {}, clear=False)
         self.env.start(); self.addCleanup(self.env.stop)
@@ -169,6 +170,54 @@ aurel.remember_rule(sys.argv[1])
             self.assertEqual(child.returncode, 0, err)
         self.assertEqual((self.root / 'memory.md').read_text(), '- Keep replies concise\n')
         self.assertEqual((self.root / 'memory.md').stat().st_mode & 0o777, 0o600)
+
+    def test_unreadable_memory_reads_empty_but_is_never_saved_over(self):
+        self.me.write_text('{"version": 2, "facts": [broken')
+        memory = self.root / 'memory.md'; memory.write_bytes(b'- Keep replies short\n\xff\xfe\n')
+        self.assertEqual(aurel.me()['facts'], [])   # an ask still runs
+        self.assertEqual(aurel.relevant_rules('anything'), '')
+        for result in (aurel.profile_add('notes', 'likes tea', 'likes'), aurel.profile_set('abc', 'x'), aurel.profile_drop('abc'),
+                       aurel.profile_forget_source('you'), aurel.remember_rule('Be brief'), aurel.edit_rule('Keep replies short', 'x'),
+                       aurel.forget_rules('short')):
+            self.assertIsInstance(result, str); self.assertTrue(result.startswith('not saved: '), result)
+        self.assertEqual(aurel.profile_import({'contacts': {'name': 'Sam'}, 'mail': [], 'errors': []})[:10], 'not saved:')
+        self.assertEqual(self.me.read_text(), '{"version": 2, "facts": [broken')
+        self.assertEqual(memory.read_bytes(), b'- Keep replies short\n\xff\xfe\n')
+        self.me.unlink(); memory.unlink()   # missing is empty, not unreadable
+        self.assertEqual(aurel.remember_rule('Be brief'), 'saved')
+        self.assertEqual(aurel.profile_add('notes', 'likes tea', 'likes'), 'saved')
+
+    def test_how_i_write_is_its_own_note_and_never_how_aurel_answers(self):
+        style = self.root / 'writing.md'
+        self.assertEqual(aurel.save_writing('casual, lowercase\n\nhey! on my way'), 'saved')
+        self.assertEqual(style.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(aurel.save_writing('I never sign off with Best', add=True), 'saved')
+        self.assertEqual(aurel.save_writing('i never sign off with best', add=True), 'saved')   # once
+        self.assertEqual(aurel.writing_style(), 'casual, lowercase\n\nhey! on my way\n- I never sign off with Best')
+        self.assertIn(('writing', 'I never sign off with Best'), aurel.memory_items())
+        self.assertTrue(aurel.save_writing('My card 4111 1111 1111 1111', add=True).startswith('not saved'))
+        self.assertTrue(aurel.save_writing('x' * 8001).startswith('not saved'))
+        style.write_bytes(b'\xff\xfe'); self.assertTrue(aurel.save_writing('more', add=True).startswith('not saved'))
+        self.assertEqual(style.read_bytes(), b'\xff\xfe')
+        self.assertEqual(aurel.save_writing(''), 'saved'); self.assertEqual(aurel.writing_style(), '')   # Settings cleared it
+        self.add('preferences', 'writing style', 'lowercase, emoji')
+        self.add('preferences', 'answer style', 'short answers')
+        self.assertEqual(aurel._answer_preferences(aurel.me()), ['short answers'])   # Aurel never answers in the user's texting voice
+        self.assertTrue(aurel.remember_turn('draft my reply', 'sounds good', None, (), True)['draft'])   # the next ask may correct it
+
+    def test_card_and_ssn_numbers_are_private_without_a_telling_word(self):
+        for text in ('visa: 4111 1111 1111 1111', 'amex 3782-822463-10005', 'ssn 123-45-6789', 'my number is 078-05-1120'):
+            self.assertTrue(aurel._secret_number(text), text)
+        for text in ('call 415-555-0134', '4111 1111 1111 1112', 'https://x.com/?id=4111111111111111', 'order 123456789', 'zip 94110-1234',
+                     '000-12-3456', '2026-10-30'):
+            self.assertFalse(aurel._secret_number(text), text)
+        self.assertEqual(aurel.profile_add('notes', '4111 1111 1111 1111', 'visa', 'you'), 'saved')
+        self.assertNotIn('4111 1111', self.me.read_text())
+        self.assertNotIn('1111', aurel.profile_context('what is my visa', 'visa'))
+        self.assertTrue(aurel.remember_rule('My Visa is 4111 1111 1111 1111').startswith('not saved'))
+        self.assertEqual(aurel.remember_rule('Never type my password for me'), 'saved')   # words alone stay rules
+        self.assertTrue(aurel.edit_rule('Never type my password for me', 'SSN 123-45-6789').startswith('not saved'))
+        self.assertEqual(aurel.memory_rules(), ['Never type my password for me'])
 
     def test_screen_injection_cannot_mutate_and_sensitive_values_never_leave_storage(self):
         ask = self.root / 'ask'; ask.mkdir(); aurel.save_request(ask, 'Summarize this page')
