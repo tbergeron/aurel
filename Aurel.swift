@@ -4726,8 +4726,7 @@ final class AgentPanels: NSObject {
         case "close": if surface == "view" { view?.orderOut(nil); closeView() }
         case "ask":   // New Chat's first message: an agent of its own, accepted, so it runs here like any other
             guard let text = body["text"] as? String, !text.isEmpty else { return }
-            let words = text.split(separator:" ")
-            send(["action":"prepare","brief":["title":words.prefix(8).joined(separator:" ") + (words.count > 8 ? "…" : ""),"brief":String(text.prefix(1000)),"request":text,"context":"Asked in the Agents window.","accepted":true]])
+            send(["action":"prepare","brief":["title":text,"brief":String(text.prefix(1000)),"request":text,"context":"Asked in the Agents window.","accepted":true]])
         case "hover":
             if id.isEmpty { endPreview() }
             else if hovered != id || miniSurface != surface { preview(id,surface:surface) }

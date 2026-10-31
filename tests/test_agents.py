@@ -134,7 +134,7 @@ class AgentTests(unittest.TestCase):
         pretty='[agent '+json.dumps({'title':'Fill the document','brief':'Complete the requested fields'},indent=2)+']'
         for good in (marker+'\nMore words',marker+' I handed it off.','  \n'+pretty,'```json\n'+marker+'\n```',marker+'\n'+marker):
             self.assertEqual(aurel.parse_handoff(good)['title'],row['title'],good)
-        self.assertEqual(aurel.parse_handoff('[agent {"title":"One two three four five","brief":"Task"}]')['title'],'One two three four')
+        self.assertEqual(aurel.parse_handoff('[agent {"title":"One  two three four five","brief":"Task"}]')['title'],'One two three four five')   # saved whole; only the views shorten it
         for bad in ('hello\n'+marker,marker[:-1],'[agent {}]','[agent {"title":3,"brief":"x"}]','[agent broken]','[agent ["x"]]'):
             self.assertIsNone(aurel.parse_handoff(bad),bad)
         self.assertEqual(aurel.parse_handoffs('Sure, starting an agent.\n'+marker)[0]['title'],row['title'])

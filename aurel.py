@@ -4044,7 +4044,7 @@ def parse_handoff(text):
         return {'steer': data['id'].strip()[:40], 'title': '', 'brief': ' '.join(data['text'].split())[:1000],
                 'ack': 'Got it: ' + ' '.join(data['text'].split())[:72]}
     if not isinstance(data, dict) or not all(isinstance(data.get(k), str) and data[k].strip() for k in ('title', 'brief')): return None
-    return {'title': ' '.join(data['title'].split()[:4])[:80], 'brief': ' '.join(data['brief'].split())[:1000],
+    return {'title': ' '.join(data['title'].split()), 'brief': ' '.join(data['brief'].split())[:1000],
             'context': str(data.get('context', ''))[:20000], 'resume': str(data.get('resume', ''))[:40],
             'app': ' '.join(str(data.get('app', '')).split())[:80], 'page': ' '.join(str(data.get('page', '')).split())[:200],
             'connectors': [n for n in data.get('connectors', []) if isinstance(n, str) and re.fullmatch(r'mcp__[\w-]+(?:__[\w*-]+)?', n)][:12]
@@ -4113,7 +4113,7 @@ def update_chats(turn=None, previous=None, identifier=None, title=None):
             if chats and previous and chats[0]['turns'][-1]['t'] == previous['t']:
                 chats[0]['turns'].append(turn)
             else:
-                chats.insert(0, {'id': uuid.uuid4().hex, 'title': ' '.join(turn['q'].split()[:8]) + ('…' if len(turn['q'].split()) > 8 else ''), 'created': turn['t'], 'turns': [turn]})
+                chats.insert(0, {'id': uuid.uuid4().hex, 'title': ' '.join(turn['q'].split()), 'created': turn['t'], 'turns': [turn]})
             chats[0]['turns'] = chats[0]['turns'][-50:]
         else:
             chat = next((c for c in chats if c['id'] == identifier), None)
@@ -5108,7 +5108,7 @@ class Agents:
             elif action == 'routine':
                 routine = next((row for row in routines() if row.get('id') == identifier), None)
                 if routine and not pref('paused', False):
-                    ask = routine['ask']; row = self.prepare({'title': ' '.join(ask.split()[:4]), 'brief': ask, 'context': 'Started by a saved routine.',
+                    ask = routine['ask']; row = self.prepare({'title': ask, 'brief': ask, 'context': 'Started by a saved routine.',
                                                               'accepted': True, 'model': routine_model(routine.get('mode', 'cheapest')),
                                                               'routine': routine['id']})
                     row['routine'] = routine['id']; self.save(row)
