@@ -2700,6 +2700,10 @@ def label(name, inp):
 
 
 WEB_JS = os.path.join(os.path.dirname(ME), 'ui', 'web.js')
+
+
+class Failure(str):
+    """A helper's answer that says it did not work: its command exits 1, so the local model's loop can tell (local_loop)."""
 RISKY_CLICK = (r'\b(send|post|publish|delete|remove|trash|buy|purchase|pay|checkout|order|unsubscribe|confirm|submit|complete|finish|'
                r'accept|agree|yes|ok|continue|subscribe|cancel|transfer|submits a form)\b')   # words that hide a send/delete/buy count too
 
@@ -2726,7 +2730,7 @@ def browser_adapter(app):
     try:
         quoted = app.replace('\\', '\\\\').replace('"', '\\"')
         r = subprocess.run(['osascript', '-e', f'return (id of application "{quoted}") & (ASCII character 9) & POSIX path of (path to application "{quoted}")'],
-                           capture_output=True, text=True, timeout=.3)
+                           capture_output=True, text=True, timeout=1)   # ~0.25 s; a timeout misses the cache and probes again
         key, _, where = (r.stdout.strip() if not r.returncode and isinstance(r.stdout, str) else '').partition('\t')
         key = key or app
     except (OSError, subprocess.TimeoutExpired):
@@ -2834,7 +2838,7 @@ def work_page(app='', words='', ask=''):
 def running_app(name):
     """The running app's exact name for a name the model wrote, as said ("chrome") or exact ('' when none runs)."""
     for n in dict.fromkeys(filter(None, (name, app_named(name)))):
-        try: found = (subprocess.run([APP, '--target-app', n], capture_output=True, text=True, timeout=1).stdout or '').strip()
+        try: found = (subprocess.run([APP, '--target-app', n], capture_output=True, text=True, timeout=3).stdout or '').strip()   # Aurel's binary starts in ~1.2 s
         except (OSError, subprocess.TimeoutExpired): continue
         if found: return found
     return ''
@@ -2874,17 +2878,17 @@ def web(cmd, n='', text='', app=None, fresh=False, want='', page=None):
     if cmd == 'read' and str(n).startswith(('http:', 'https:')):
         try:
             url = urllib.parse.urlsplit(n)
-            if not url.hostname or url.username or url.password: return 'Use an HTTP(S) page URL without credentials.'
-        except ValueError: return 'Use a valid HTTP(S) page URL.'
-        if not agent_url_allowed(n): return agent_url_denial()
+            if not url.hostname or url.username or url.password: return Failure('Use an HTTP(S) page URL without credentials.')
+        except ValueError: return Failure('Use a valid HTTP(S) page URL.')
+        if not agent_url_allowed(n): return Failure(agent_url_denial())
         if pref('workIn', 'back') == 'front' and wants_focus(None, True):
             status = show(n, bg=True)
-            if not status.startswith('opened '): return status
+            if not status.startswith('opened '): return Failure(status)
             return web('read', app=app, want=n)
         try:
             app = app or running_app(n)
             adapter = browser_adapter(app) if app else ''
-            if not adapter: return 'Open a scriptable browser window first. Background reads never launch or focus a browser.'
+            if not adapter: return Failure('Open a scriptable browser window first. Background reads never launch or focus a browser.')
             quoted = app.replace('\\', '\\\\').replace('"', '\\"')
             tab_id = 'id of t' if adapter == 'chromium' else 'index of t'
             selection = 'active tab index' if adapter == 'chromium' else 'current tab'
@@ -2910,20 +2914,20 @@ def web(cmd, n='', text='', app=None, fresh=False, want='', page=None):
             r = subprocess.run(['osascript', '-e', script, n, str(own)], capture_output=True, text=True, timeout=5)
             ids = r.stdout.strip('\n').split('\t')
             if r.returncode or len(ids) != 3 or not all(i.isdigit() and int(i) > 0 for i in ids[:2]):
-                return 'Could not create a background page in an existing window. Requested page was not read.'
+                return Failure('Could not create a background page in an existing window. Requested page was not read.')
             if ids[2] == 'new':
                 private_json(os.path.join(agent_gate_dir(os.environ['AUREL_ASK']), 'browser-window.json'), {'app': app, 'window': int(ids[0])})
                 keep_behind(mine, app, wait=.5)
             page = dict(app=app, adapter=adapter, window=int(ids[0]), tab=int(ids[1]), target=None)
             status = web('wait', text=n, app=app, page=page)
-            if status != 'Page ready.': return status + '\nRequested page not ready; do not substitute another source.'
+            if status != 'Page ready.': return Failure(status + '\nRequested page not ready; do not substitute another source.')
             result = web('read', app=app, want=n, page=page)
             directory = os.environ.get('AUREL_ASK', DIR)
             os.makedirs(directory, mode=0o700, exist_ok=True)
             private_json(os.path.join(directory, 'web.json'), page)
             return result
         except (OSError, ValueError, subprocess.TimeoutExpired) as e:
-            return f'Could not read the background page: {e}'
+            return Failure(f'Could not read the background page: {e}')
     explicit = app; app = app or os.environ.get('AUREL_FRONT', '')
     path = os.path.join(os.environ.get('AUREL_ASK', DIR), 'web.json')
     if page is None and not explicit and not fresh and (cmd != 'read' or os.environ.get('AUREL_ASK')):
@@ -2933,10 +2937,10 @@ def web(cmd, n='', text='', app=None, fresh=False, want='', page=None):
         except (OSError,ValueError,AttributeError): pass
     app = app or running_app('https://')   # an Agents-window task has no front app: the default browser
     if not app:
-        return 'No browser is open.'
+        return Failure('No browser is open.')
     adapter = browser_adapter(app)
     if not adapter:
-        return f'{app} does not expose a scriptable web page. Read it with {WINDOW} or {HANDS} see.'
+        return Failure(f'{app} does not expose a scriptable web page. Read it with {WINDOW} or {HANDS} see.')
     try:
         saved = page
         if saved is None and not fresh and os.path.exists(path) and (cmd != 'read' or os.environ.get('AUREL_ASK')):
@@ -2946,7 +2950,7 @@ def web(cmd, n='', text='', app=None, fresh=False, want='', page=None):
             r = subprocess.run(['osascript', '-e', query], capture_output=True, text=True, timeout=5)
             ids = r.stdout.strip().split('\t')
             if r.returncode or len(ids) != 2 or not all(i.isdigit() for i in ids):
-                return f'Could not find a scriptable page window. Use {HANDS} see.'
+                return Failure(f'Could not find a scriptable page window. Use {HANDS} see.')
             saved = {'app': app, 'adapter': adapter, 'window': int(ids[0]), 'tab': int(ids[1]), 'target': None}
             os.makedirs(os.path.dirname(path),mode=0o700,exist_ok=True)
             private_json(path, saved)
@@ -2955,7 +2959,7 @@ def web(cmd, n='', text='', app=None, fresh=False, want='', page=None):
         if os.environ.get('AUREL_AGENT') and cmd in ('click', 'fill', 'type-after') and saved['window'] != agent_window(app):
             handed = handed_page()
             if any(handed.get(k) != saved.get(k) for k in ('app', 'window', 'tab')):
-                return f"That page is in the user's own window; agents only read it. To act on it, open its URL in this task's window: {WEB} read <url>"
+                return Failure(f"That page is in the user's own window; agents only read it. To act on it, open its URL in this task's window: {WEB} read <url>")
             want = want or handed.get('url', '')   # the user's tab went to another site: never act on that one
         if cmd in ('read','wait') or not saved.get('target'):
             r = subprocess.run(['osascript', '-e', f'tell application "{app}" to get {{name, bounds}} of window id {saved["window"]}'],capture_output=True,text=True,timeout=2)
@@ -2968,7 +2972,7 @@ def web(cmd, n='', text='', app=None, fresh=False, want='', page=None):
         _, tell = browser_terms(app, adapter, saved['window'], saved['tab'])
         if isinstance(saved.get('target'), dict): emit(['▣ ' + json.dumps({**saved['target'], 'action':cmd})])
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:
-        return f'Could not use the page: {e}\nUse the screen instead: {HANDS} see'
+        return Failure(f'Could not use the page: {e}\nUse the screen instead: {HANDS} see')
     with open(WEB_JS) as f:
         src = f.read()
     def js(c, expr=None, timeout=15, again=True):
@@ -2989,24 +2993,24 @@ def web(cmd, n='', text='', app=None, fresh=False, want='', page=None):
             current = str(state.get('signature', '')).split('|')[0]
             host = lambda url: (urllib.parse.urlsplit(url).hostname or '').removeprefix('www.')
             return host(current) == host(want)
-        if want and not same_source(): return 'The browser is not on the requested source. Read it again before continuing.'
+        if want and not same_source(): return Failure('The browser is not on the requested source. Read it again before continuing.')
         if cmd == 'click':
             try:
                 c = json.loads(js('name'))
             except ValueError:
-                return 'No such control. Read the page again.'
+                return Failure('No such control. Read the page again.')
             if c.get('submit') or re.search(RISKY_CLICK, c['what'], re.I) and pref('safe', True):
                 if not os.environ.get('AUREL_ASK'):   # a saved shortcut has no Allow card: never click these blind
-                    return 'This click needs the user\'s confirmation. Ask through Aurel, not a shortcut.'
+                    return Failure('This click needs the user\'s confirmation. Ask through Aurel, not a shortcut.')
                 if not task_allowed('web click'):
                     answer = ask_user({'q': f'Click "{c["short"][:40]}"?', 'cmd': f'{app}: click "{c["what"][:300]}"', 'task': managed_agent()}, 60)
                     if answer == 'task' and managed_agent(): allow_for_task('web click')
-                    elif answer != 'y': return 'The user said no. Do not try another way; say it was not done.'
+                    elif answer != 'y': return Failure('The user said no. Do not try another way; say it was not done.')
             if json.loads(js('name')) != c:
-                return 'The control changed since the check. Read the page again.'
+                return Failure('The control changed since the check. Read the page again.')
             text = c['url']   # click only in the tab that was checked
             done = js('click')
-            if not done.startswith('Clicked'): return done
+            if not done.startswith('Clicked'): return Failure(done)
             try:
                 if not page_ready(lambda timeout:js('ready',timeout=timeout)): return done + '\nPage still loading. Read again before acting.'
                 changed = js('state')
@@ -3016,7 +3020,7 @@ def web(cmd, n='', text='', app=None, fresh=False, want='', page=None):
             except (RuntimeError,ValueError,subprocess.TimeoutExpired):
                 return done + '\nPage readiness unavailable. Read again before acting.'   # the click succeeded; never report it failed and cause a duplicate
         result = js(cmd if cmd in ('read', 'fill', 'type-after') else 'read')
-        if want and not same_source(): return 'The page left the requested source during the read. Its content was not returned.'
+        if want and not same_source(): return Failure('The page left the requested source during the read. Its content was not returned.')
         if cmd == 'type-after':
             return result
         if cmd == 'fill' and result.startswith('Filled'):
@@ -3028,7 +3032,7 @@ def web(cmd, n='', text='', app=None, fresh=False, want='', page=None):
                 return result + '\nChanged state unavailable. Re-read values before claiming success.'
         return result
     except (RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
-        return f'Could not use the page: {e}\nUse the screen instead: {HANDS} see'   # e.g. a second, windowless Chrome took the AppleScript
+        return Failure(f'Could not use the page: {e}\nUse the screen instead: {HANDS} see')   # e.g. a second, windowless Chrome took the AppleScript
 
 
 def allow_page_js(app, ask=False):
@@ -5781,6 +5785,8 @@ def local_loop(messages, end, step=lambda command: None, slot=None):
     """The local model's tool loop on messages (extended in place, so a follow-up keeps them) -> (reply, commands run). step: before each command.
     slot: the server slot to run in; the box ask uses 0, where key-down restored its prompt."""
     ran, reply, forced = [], '', False
+    helper = re.compile(rf'(?m)^\W*(?:\S*/)?{re.escape(os.path.basename(ME))}\s+--')
+    failures, worked = set(), False   # (command, output) of each failed step; a step that exited 0
     for _ in range(15):
         if time.monotonic() > end:
             reply = 'That took too long, so I stopped. Please try again.'
@@ -5796,14 +5802,19 @@ def local_loop(messages, end, step=lambda command: None, slot=None):
             reply = without_handoff_line(message.get('content') or '')
             # A small model under the long prompt writes its helper commands as the answer instead of calling run (asking it
             # again in words doesn't help): nothing ran, so this turn is asked again with a tool call required.
-            if re.search(rf'(?m)^\W*(?:\S*/)?{re.escape(os.path.basename(ME))}\s+--', reply):
+            if helper.search(reply):
                 if not forced:
                     forced = True
                     continue
                 reply = 'The local model wrote out commands instead of running them, so nothing was done. Please try again.'
                 break
+            # Gemma said "I searched for toothbrush and clicked the first result" after every Aurel step failed. When only
+            # Aurel's helpers ran (they exit 1 on failure; a shell command's exit 1 can be an answer) and none worked,
+            # a reply that doesn't admit it is not the user's answer: the last step's own words are.
+            gave_up = ran and not worked and all(helper.search(c) for c in ran) and not FAILED.search(reply)
+            if gave_up: reply = didnt_work(out)
             messages.append({'role': 'assistant', 'content': reply})
-            run.ok = bool(reply)
+            run.ok = bool(reply) and not gave_up
             break
         forced = False
         messages.append({'role': 'assistant', 'content': message.get('content') or '', 'tool_calls': calls})
@@ -5819,15 +5830,30 @@ def local_loop(messages, end, step=lambda command: None, slot=None):
                 try:
                     r = subprocess.run(['/bin/zsh', '-c', command], capture_output=True, text=True, timeout=left, cwd=tempfile.gettempdir())
                     out = (r.stdout + r.stderr).strip() or f'(no output, exit {r.returncode})'
+                    failed = bool(r.returncode)
                 except subprocess.TimeoutExpired:
-                    out = f'Timed out after {left:.0f} s.'
+                    out, failed = f'Timed out after {left:.0f} s.', True
             else:
-                out = why
+                out, failed = why, True
             trace('tool', model='local', ran=ok, command=command, out=out[-2000:])
             messages.append({'role': 'tool', 'tool_call_id': call.get('id', ''), 'content': out[-6000:]})
+            worked = worked or not failed
+            if failed and (command, out) in failures:   # Gemma ran "--web click 1" five times for the same refusal
+                reply, calls = didnt_work(out), []
+                messages.append({'role': 'assistant', 'content': reply})
+                break
+            if failed: failures.add((command, out))
+        if not calls: break
     else:
         reply = 'I ran out of steps before finishing. Please try a smaller request.'
     return reply, ran
+
+
+def didnt_work(output):
+    """The reply when the local model's steps all failed: the failure's first line, without helper paths meant for the model."""
+    first = (output.strip().splitlines() or [''])[0]
+    said = [part for part in re.split(r'(?<=\.)\s+', first) if os.path.basename(ME) not in part] or [first]
+    return f"That didn't work: {' '.join(said).rstrip('.')}."
 
 
 def local_agent():
@@ -7117,7 +7143,10 @@ def main():
         if any(a.startswith('--') and a != '--ocr' for a in rest): return print('Use --window [app] [--offset N] [--ocr].')   # a made-up flag is not part of the app name
         return print(window_text(' '.join(a for a in rest if a != '--ocr'), offset, '--ocr' in rest))
     if args[:1] == ['--web']:
-        return print(web(*args[1:3], ' '.join(args[3:])))
+        out = web(*args[1:3], ' '.join(args[3:]))
+        print(out)
+        if isinstance(out, Failure): raise SystemExit(1)
+        return
     if args[:1] == ['--hands']:
         result, ok = hands(*args[1:])
         print(result, flush=True)

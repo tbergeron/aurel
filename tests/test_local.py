@@ -188,6 +188,28 @@ class LocalTests(unittest.TestCase):
             self.assertEqual([c.kwargs['tool_choice'] for c in llm.call_args_list][:2], [None, 'required'])   # the written turn is asked again, a call required
             self.assertNotIn(written['content'], [m.get('content') for m in llm.call_args.args[0]])   # and the written commands never become history
 
+    def test_step_loop_never_reports_success_when_every_aurel_step_failed(self):
+        # Gemma ran "--web click 1" five times for the same refusal, then said it searched Amazon and clicked a result.
+        call = lambda c: {'tool_calls': [{'id': 'a', 'function': {'arguments': json.dumps({'command': c})}}]}
+        click, typed = f'{aurel.ME} --web click 1', f'{aurel.ME} --web type-after "Search" "toothbrush"'
+        refused = Mock(stdout=f"That page is in the user's own window; agents only read it. To act on it, open its URL in this task's window: {aurel.ME} --web read <url>\n",
+                       stderr='', returncode=1)
+        claim = {'content': 'I searched for "toothbrush" on Amazon.ca and clicked the first result.'}
+        for replies, outputs, want, ok in (
+                ([call(click), call(click), claim], [refused, refused], "That didn't work: That page is in the user's own window; agents only read it.", False),   # same failure twice: stopped
+                ([call(click), call(typed), claim], [refused, refused], "That didn't work: That page is in the user's own window; agents only read it.", False),   # all failed: no claim
+                ([call(click), {'content': 'I could not click it: that page is in your window.'}], [refused], 'I could not click it', True),   # an admission stays
+                ([call(click), call('echo done'), claim], [refused, Mock(stdout='done', stderr='', returncode=0)], claim['content'], True),   # something worked
+                ([call('pgrep -x Spotify'), {'content': 'Spotify is not running.'}], [Mock(stdout='', stderr='', returncode=1)], 'Spotify is not running.', True)):   # a shell exit 1 is an answer
+            replies, outputs = iter(replies), iter(outputs)
+            with patch.object(aurel, 'llm', side_effect=lambda *a, **k: next(replies)), patch.object(aurel, 'local_gate', return_value=(True, '')), \
+                 patch.object(aurel.subprocess, 'run', side_effect=lambda *a, **k: next(outputs)), patch.object(aurel, 'trace'):
+                aurel.run.ok = False
+                messages = [{'role': 'user', 'content': 'use Bosk and look for a toothbrush on amazon'}]
+                reply, _ = aurel.local_loop(messages, aurel.time.monotonic() + 60)
+            self.assertIn(want, reply); self.assertNotIn(aurel.ME, reply); self.assertEqual(aurel.run.ok, ok, want)
+            self.assertEqual(messages[-1], {'role': 'assistant', 'content': reply})   # a follow-up sees what the user was told
+
     def test_step_loop_without_the_model_asks_for_setup(self):
         with patch.object(aurel, 'llm_url', return_value=''), patch.object(aurel, 'say') as say, patch.dict(os.environ, {'AUREL_LLM_READY': ''}):
             reply, _, _ = aurel.run('say hi', ())

@@ -45,7 +45,7 @@ class PageReadyTests(unittest.TestCase):
              patch.object(aurel, 'background_tab', return_value=True), patch.object(aurel, 'remember_background_tab') as remember, \
              patch.object(aurel, 'web', return_value='Page ready.') as web:
             self.assertEqual(aurel.show('https://fixture.invalid', bg=True), 'opened https://fixture.invalid in the background')
-        self.assertEqual(run.call_args_list, [unittest.mock.call([aurel.APP, '--target-app', 'https://fixture.invalid'], capture_output=True, text=True, timeout=1)])
+        self.assertEqual(run.call_args_list, [unittest.mock.call([aurel.APP, '--target-app', 'https://fixture.invalid'], capture_output=True, text=True, timeout=3)])
         web.assert_called_once_with('wait', text='https://fixture.invalid', app='Browser Fixture')
         remember.assert_called_once_with('Browser Fixture')
 
