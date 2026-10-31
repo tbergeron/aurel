@@ -54,7 +54,7 @@ class PageReadyTests(unittest.TestCase):
             def worker(args, **kwargs):
                 if args[:2] == ['pgrep', '-xq']: return subprocess.CompletedProcess(args, 0, '', '')
                 script = args[2]
-                if script.startswith('id of application'): return subprocess.CompletedProcess(args, 0, 'org.fixture.nebula\n', '')
+                if script.startswith('return (id of application'): return subprocess.CompletedProcess(args, 0, 'org.fixture.nebula\t/Applications/Nebula.app/\n', '')
                 if 'return (id of window' in script: return subprocess.CompletedProcess(args, 0, '10\t2', '')
                 return subprocess.CompletedProcess(args, 0, '{"ready":true,"signature":"fixture"}', '')
             with patch.object(aurel, 'DIR', scratch), patch.object(aurel.subprocess, 'run', side_effect=worker) as run:
@@ -76,7 +76,7 @@ class PageReadyTests(unittest.TestCase):
             def worker(args, **kwargs):
                 if args[:2] == ['pgrep', '-xq']: return subprocess.CompletedProcess(args, 0, '', '')
                 script = args[2]; probes.append(script)
-                if script.startswith('id of application'): return subprocess.CompletedProcess(args, 0, 'org.fixture.native\n', '')
+                if script.startswith('return (id of application'): return subprocess.CompletedProcess(args, 0, 'org.fixture.native\t/Applications/Native.app/\n', '')
                 if 'return (id of window' in script: return subprocess.CompletedProcess(args, 0, '10\t2', '')
                 return subprocess.CompletedProcess(args, 1, '', 'Not allowed to send Apple events')
             with patch.object(aurel, 'DIR', scratch), patch.object(aurel.subprocess, 'run', side_effect=worker):
@@ -91,7 +91,7 @@ class PageReadyTests(unittest.TestCase):
             def worker(args, **kwargs):
                 if args[:2] == ['pgrep', '-xq']: return subprocess.CompletedProcess(args, 0, '', '')
                 script = args[2]
-                if script.startswith('id of application'): return subprocess.CompletedProcess(args, 0, 'org.fixture.browser\n', '')
+                if script.startswith('return (id of application'): return subprocess.CompletedProcess(args, 0, 'org.fixture.browser\t/Applications/Browser Fixture.app/\n', '')
                 if 'return (id of window' in script: return subprocess.CompletedProcess(args, 0, '10\t2', '')
                 return subprocess.CompletedProcess(args, 1, '', 'You must enable Allow JavaScript from Apple Events')
             with patch.object(aurel, 'DIR', scratch), patch.object(aurel.subprocess, 'run', side_effect=worker):
@@ -101,7 +101,7 @@ class PageReadyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as scratch:
             def worker(args, **kwargs):
                 if args[:2] == ['pgrep', '-xq']: return subprocess.CompletedProcess(args, 0, '', '')
-                if args[2].startswith('id of application'): return subprocess.CompletedProcess(args, 0, 'org.fixture.browser\n', '')
+                if args[2].startswith('return (id of application'): return subprocess.CompletedProcess(args, 0, 'org.fixture.browser\t/Applications/Browser Fixture.app/\n', '')
                 return subprocess.CompletedProcess(args, 1, '', 'Not authorized to send Apple events')
             with patch.object(aurel, 'DIR', scratch), patch.object(aurel.subprocess, 'run', side_effect=worker) as run:
                 self.assertEqual(aurel.browser_adapter('Browser Fixture'), '')

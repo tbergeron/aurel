@@ -2684,7 +2684,8 @@ def browser_terms(app, adapter, window=None, tab=None):
 
 
 def browser_adapter(app):
-    """Return the page-JavaScript protocol an app actually answers, cached by bundle id."""
+    """Return the page-JavaScript protocol an app actually answers, cached by bundle id. A "none" holds only for the
+    installed build: an update can add scripting (Bosk did), so a changed app is probed again."""
     try:
         if subprocess.run(['pgrep', '-xq', app], capture_output=True, timeout=.3).returncode:
             return ''
@@ -2692,16 +2693,19 @@ def browser_adapter(app):
         return ''
     try:
         quoted = app.replace('\\', '\\\\').replace('"', '\\"')
-        r = subprocess.run(['osascript', '-e', f'id of application "{quoted}"'],
+        r = subprocess.run(['osascript', '-e', f'return (id of application "{quoted}") & (ASCII character 9) & POSIX path of (path to application "{quoted}")'],
                            capture_output=True, text=True, timeout=.3)
-        key = r.stdout.strip() if not r.returncode and isinstance(r.stdout, str) and r.stdout.strip() else app
+        key, _, where = (r.stdout.strip() if not r.returncode and isinstance(r.stdout, str) else '').partition('\t')
+        key = key or app
     except (OSError, subprocess.TimeoutExpired):
-        key = app
+        key, where = app, ''
+    try: none = f'none {int(os.path.getmtime(os.path.join(where, "Contents/Info.plist")))}' if where else 'none'
+    except OSError: none = 'none'
     cache_path = os.path.join(DIR, 'web-capabilities.json')
     try:
         with open(cache_path) as f: cached = json.load(f)
         if cached.get(key) in ('chromium', 'webkit'): return cached[key]
-        if cached.get(key) is False: return ''
+        if cached.get(key) == none: return ''
     except (OSError, ValueError, AttributeError): cached = {}
     def remember(value):
         os.makedirs(DIR, mode=0o700, exist_ok=True)
@@ -2742,7 +2746,7 @@ def browser_adapter(app):
         except (OSError, ValueError, subprocess.TimeoutExpired):
             uncertain = True
             continue
-    if not uncertain: remember(False)
+    if not uncertain: remember(none)
     return ''
 
 

@@ -1532,6 +1532,21 @@ class BoxLookTests(unittest.TestCase):
         self.assertIn('if !pillOn { stuck = true }', app.split('case .leftMouseDragged:', 1)[1].split('default:', 1)[0])
         self.assertIn('else { if !pillOn { pinned = true }; grab =', app.split('case .leftMouseDown:', 1)[1].split('case .leftMouseDragged:', 1)[0])
 
+    def test_a_browser_without_page_scripting_is_probed_again_after_it_updates(self):
+        # Bosk had no AppleScript, then an update added it: a "none" kept forever would never let Aurel drive it.
+        with tempfile.TemporaryDirectory() as root:
+            plist = Path(root, 'Bosk.app', 'Contents', 'Info.plist'); plist.parent.mkdir(parents=True); plist.write_text('x')
+            probes = []
+            def run(args, **_):
+                if args[0] == 'pgrep': return subprocess.CompletedProcess(args, 0, '', '')
+                if 'path to application' in args[-1]: return subprocess.CompletedProcess(args, 0, f'com.brainpad.bosk\t{root}/Bosk.app/\n', '')
+                probes.append(args); return subprocess.CompletedProcess(args, 1, '', "Can't get window 1. (-1728)")
+            Path(root, 'web-capabilities.json').write_text(json.dumps({'com.brainpad.bosk': False}))   # an older Aurel's "none"
+            with patch.object(aurel, 'DIR', root), patch.object(aurel.subprocess, 'run', side_effect=run):
+                self.assertEqual(aurel.browser_adapter('Bosk'), ''); self.assertTrue(probes)   # probed again
+                probes.clear(); self.assertEqual(aurel.browser_adapter('Bosk'), ''); self.assertFalse(probes)   # same build: no probe
+                os.utime(plist, (1, 1)); self.assertEqual(aurel.browser_adapter('Bosk'), ''); self.assertTrue(probes)   # updated: probed again
+
     def test_links_open_in_the_browser_only_for_web_and_mail(self):
         handler = self.SOURCE[self.SOURCE.index('if let s = b["link"] as? String'):]
         handler = handler[:handler.index('\n            }')]
