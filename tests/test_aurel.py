@@ -492,6 +492,14 @@ class BrainTests(unittest.TestCase):
         run.assert_called_once_with([aurel.APP, '--type'], input='Hello world', capture_output=True, text=True)
         self.assertEqual(out.getvalue().strip(), 'typed into Notes')
 
+    def test_agents_never_type_at_the_users_cursor(self):
+        # A Local agent ran --type "toothbrush" meaning Amazon's search box; it went into Aurel's own follow-up box.
+        with patch('sys.argv', ['aurel.py', '--type', 'toothbrush']), patch.dict(os.environ, {'AUREL_AGENT': 'fixture'}), \
+             patch.object(aurel.subprocess, 'run') as run, patch('sys.stdout', new_callable=io.StringIO) as out:
+            with self.assertRaises(SystemExit) as error:
+                aurel.main()
+        run.assert_not_called(); self.assertEqual(error.exception.code, 1); self.assertIn('--web fill', out.getvalue())
+
     def test_typing_preserves_native_failure_status(self):
         with patch('sys.argv', ['aurel.py', '--type', 'Hello']), \
              patch.object(aurel.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, stdout='Could not type: focus changed.')), \

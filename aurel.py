@@ -2794,13 +2794,16 @@ def agent_window(app):
     except (KeyError, OSError, ValueError, AttributeError): return 0
 
 
-def close_agent_window(directory):
-    """Task end: close the window the agent opened (never one it found), without launching the browser."""
+def close_agent_window(directory, request=''):
+    """Task end: close the window the agent opened (never one it found), without launching the browser. A request that names
+    that browser or asks to go to, open or show something wants the page: it stays (behind the user's window), and a
+    follow-up keeps working in it."""
     path = os.path.join(agent_gate_dir(directory), 'browser-window.json')
     try:
         with open(path) as f: saved = json.load(f)
-        os.remove(path)
         app, window = saved['app'], saved['window']
+        if re.search(rf"\b(?:go(?:ing)? to|open|show|pull up|bring up|{re.escape(app)})\b", request, re.I): return   # ponytail: wording heuristic
+        os.remove(path)
         if type(window) is not int or not isinstance(app, str) or subprocess.run(['pgrep', '-xq', app], timeout=.5).returncode: return
         quoted = app.replace('\\', '\\\\').replace('"', '\\"')
         subprocess.run(['osascript', '-e', f'tell application "{quoted}" to if exists window id {window} then close window id {window}'], capture_output=True, timeout=3)
@@ -4323,7 +4326,7 @@ def agent_url_allowed(url, directory=None):
 
 def agent_url_denial():
     return ('URL not opened: it was not supplied by the user or observed in an earlier tool result/page. '
-            'Search for the site entry page, open the exact result, then use the site search, filter and sort controls.')
+            f'Find the site entry page with {SEARCH} "<site name>", open the exact result URL, then use the site search, filter and sort controls.')
 
 
 def question_answer_path(directory, question):
@@ -4847,7 +4850,7 @@ class Agents:
                     row['learned'] = key
             row['made'] = agent_results(row)
         self.stop_process(row['id']); self.save(row)
-        threading.Thread(target=close_agent_window, args=(row['directory'],), daemon=True).start()
+        threading.Thread(target=close_agent_window, args=(row['directory'], f"{row.get('request', '')} {row.get('brief', '')}"), daemon=True).start()
         if row['status'] == 'done':
             self.emit({'event': 'done', 'agent': row}); self.pings.append(row['id']); self.pump_ping()
         self.drain()
@@ -7124,6 +7127,9 @@ def main():
         time.sleep(0.5)   # the window draws before the picture
         return print('\n'.join(f'{label}: {path}' for path, label in look(cleanup=False)) or 'no screenshot: ' + need('screen', 'To see your screen for this task.'))
     if args[:1] == ['--type']:
+        if os.environ.get('AUREL_AGENT'):   # a Local agent typed "toothbrush" into Aurel's own follow-up box, not Amazon's search
+            print(f'Agents never type at the user\'s cursor. In this task\'s page: {WEB} read "<url>", then {WEB} fill <n> "<text>" with a number from that read.')
+            sys.exit(1)
         r = subprocess.run([APP, '--type'], input=' '.join(args[1:]), capture_output=True, text=True)
         print(r.stdout.strip() or 'Could not type. Rebuild Aurel and allow Accessibility.')
         if r.returncode:

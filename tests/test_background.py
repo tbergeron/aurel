@@ -247,6 +247,12 @@ class BackgroundTests(unittest.TestCase):
             aurel.close_agent_window(os.environ['AUREL_ASK'])
             self.assertIn('close window id 77',scripts[-1][2]);self.assertFalse(saved.exists())
             count=len(scripts);aurel.close_agent_window(os.environ['AUREL_ASK']);self.assertEqual(len(scripts),count)   # never a window it did not open
+            # "Use Bosk browser and go to amazon": the user wants that page, so it stays and a follow-up reuses it; research closes
+            for request,kept in (('Use Fixture Browser and look for a toothbrush',True),('go to amazon and look for a toothbrush',True),
+                                 ('show me the release notes',True),('research budget microphones',False)):
+                saved.write_text(json.dumps({'app':'Fixture Browser','window':77}));count=len(scripts)
+                aurel.close_agent_window(os.environ['AUREL_ASK'],request)
+                self.assertEqual((saved.exists(),len(scripts)==count),(kept,kept),request)
 
     def test_agent_site_placement_uses_main_open_path_only_when_requested(self):
         url = 'https://unseen.example/catalog'
